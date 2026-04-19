@@ -1,0 +1,36 @@
+{
+  "name": "athleteos",
+  "version": "1.0.0",
+  "description": "A web application for ingesting videos and ECG data from the Polar H10.",
+  "main": "index.js",
+  "scripts": {
+    "dev": "next dev",
+    "build": "next build",
+    "start": "next start",
+    "lint": "eslint ."
+  },
+  "dependencies": {
+    "@supabase/supabase-js": "^2.39.0",
+    "chart.js": "^4.4.0",
+    "chartjs-plugin-zoom": "^2.2.0",
+    "next": "latest",
+    "react": "latest",
+    "react-chartjs-2": "^5.3.0",
+    "react-dom": "latest"
+  },
+  "devDependencies": {
+    "@types/react": "19.2.14",
+    "eslint": "^9.0.0",
+    "eslint-config-next": "latest",
+    "typescript": "latest"
+  },
+  "keywords": [
+    "polar",
+    "ecg",
+    "video",
+    "upload",
+    "dashboard"
+  ],
+  "author": "Francisco Bras",
+  "license": "MIT"
+}
