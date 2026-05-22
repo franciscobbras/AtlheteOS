@@ -10,18 +10,6 @@ const UploadForm = () => {
   const [error, setError] = useState<string | null>(null);
   const [success, setSuccess] = useState(false);
 
-  const handleVideoChange = (event: React.ChangeEvent<HTMLInputElement>) => {
-    setVideoFile(event.target.files?.[0] || null);
-  };
-
-  const handleEcgChange = (event: React.ChangeEvent<HTMLInputElement>) => {
-    setEcgFile(event.target.files?.[0] || null);
-  };
-
-  const handleMacrofactorChange = (event: React.ChangeEvent<HTMLInputElement>) => {
-    setMacrofactorFile(event.target.files?.[0] || null);
-  };
-
   const handleSubmit = async (event: React.FormEvent<HTMLFormElement>) => {
     event.preventDefault();
     setLoading(true);
@@ -40,17 +28,11 @@ const UploadForm = () => {
     if (macrofactorFile) formData.append('macrofactor', macrofactorFile);
 
     try {
-      const response = await fetch('/api/upload', {
-        method: 'POST',
-        body: formData,
-      });
-
+      const response = await fetch('/api/upload', { method: 'POST', body: formData });
       if (!response.ok) {
         const body = await response.json().catch(() => null);
-        const message = body?.error || 'Upload failed';
-        throw new Error(message);
+        throw new Error(body?.error || 'Upload failed');
       }
-
       setSuccess(true);
     } catch (err) {
       setError((err as Error).message);
@@ -60,57 +42,36 @@ const UploadForm = () => {
   };
 
   return (
-    <form className="upload-form" onSubmit={handleSubmit}>
-      <div className="field-group">
-        <label className="field-label" htmlFor="video-upload">
-          Video File
-        </label>
-        <input
-          id="video-upload"
-          className="file-input"
-          type="file"
-          accept="video/*"
-          onChange={handleVideoChange}
-        />
-        <p className="field-hint">Optional: upload video if available.</p>
+    <form onSubmit={handleSubmit} style={{ display: 'grid', gap: 14 }}>
+      <div className="upload-section">
+        <label className="field-label" htmlFor="video-upload">Video file</label>
+        <input id="video-upload" className="input" type="file" accept="video/*"
+          onChange={(e) => setVideoFile(e.target.files?.[0] || null)} />
+        <p className="field-hint">Optional — upload session video if available.</p>
       </div>
 
-      <div className="field-group">
-        <label className="field-label" htmlFor="ecg-upload">
-          ECG File
-        </label>
-        <input
-          id="ecg-upload"
-          className="file-input"
-          type="file"
-          accept=".csv"
-          onChange={handleEcgChange}
-        />
-        <p className="field-hint">Optional: upload ECG data to populate the waveform and raw preview.</p>
+      <div className="upload-section">
+        <label className="field-label" htmlFor="ecg-upload">ECG file</label>
+        <input id="ecg-upload" className="input" type="file" accept=".csv"
+          onChange={(e) => setEcgFile(e.target.files?.[0] || null)} />
+        <p className="field-hint">Optional — CSV export from Polar.</p>
       </div>
 
-      <div className="field-group">
-        <label className="field-label" htmlFor="macrofactor-upload">
-          Macrofactor Data
-        </label>
-        <input
-          id="macrofactor-upload"
-          className="file-input"
-          type="file"
-          accept=".csv,.json"
-          onChange={handleMacrofactorChange}
-        />
-        <p className="field-hint">
-          Upload macrofactor metrics for advanced session context. JSON or CSV accepted.
-        </p>
+      <div className="upload-section">
+        <label className="field-label" htmlFor="macrofactor-upload">Macrofactor data</label>
+        <input id="macrofactor-upload" className="input" type="file" accept=".csv,.json"
+          onChange={(e) => setMacrofactorFile(e.target.files?.[0] || null)} />
+        <p className="field-hint">Optional — JSON or CSV macrofactor export.</p>
       </div>
 
-      <button className="button primary" type="submit" disabled={loading}>
-        {loading ? 'Uploading...' : 'Upload session'}
-      </button>
+      <div>
+        <button className="btn btn-primary" type="submit" disabled={loading}>
+          {loading ? 'Uploading…' : 'Upload session'}
+        </button>
+      </div>
 
-      {error && <p className="message error">{error}</p>}
-      {success && <p className="message success">Upload successful!</p>}
+      {error && <p className="message message-error">{error}</p>}
+      {success && <p className="message message-success">Upload successful!</p>}
     </form>
   );
 };

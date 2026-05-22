@@ -1,6 +1,6 @@
-# AthleteOS
+# Nexus
 
-AthleteOS is a web application designed to ingest and synchronize video and ECG data from the Polar H10 heart rate monitor. This application provides a user-friendly interface for uploading data and a dashboard for visualizing the results in sync.
+Nexus is a web application designed to ingest and synchronize video and ECG data from the Polar H10 heart rate monitor. This application provides a user-friendly interface for uploading data and a dashboard for visualizing the results in sync.
 
 ## Features
 
@@ -11,7 +11,7 @@ AthleteOS is a web application designed to ingest and synchronize video and ECG 
 ## Project Structure
 
 ```
-athleteos
+nexus
 ├── public              # Static assets (images, fonts, etc.)
 ├── src
 │   ├── app
@@ -41,12 +41,12 @@ athleteos
 
 ## Getting Started
 
-To get started with AthleteOS, follow these steps:
+To get started with Nexus, follow these steps:
 
 1. Clone the repository:
    ```
    git clone <repository-url>
-   cd athleteos
+   cd nexus
    ```
 
 2. Install the dependencies:
@@ -79,7 +79,7 @@ SUPABASE_SERVICE_ROLE_KEY=your-service-role-key
 ## Deploying to Vercel
 
 1. Push this repository to GitHub.
-2. In Vercel, connect your GitHub account and select the `athleteos` repository.
+2. In Vercel, connect your GitHub account and select the `nexus` repository.
 3. Use the default build command `npm run build` and the output directory `.next`.
 4. Add the following environment variables in Vercel:
    - `SUPABASE_URL`

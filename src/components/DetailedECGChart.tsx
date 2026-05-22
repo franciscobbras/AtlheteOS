@@ -90,9 +90,11 @@ const DetailedECGChart: React.FC<DetailedECGChartProps> = ({ ecgData, labels, st
         },
       },
       y: {
+        min: -1400,
+        max: 1400,
         title: {
           display: true,
-          text: 'ECG value',
+          text: 'ECG (µV)',
           color: '#c7d4f6',
         },
         ticks: {
@@ -103,7 +105,7 @@ const DetailedECGChart: React.FC<DetailedECGChartProps> = ({ ecgData, labels, st
   };
 
   return (
-    <div className="detail-chart-panel">
+    <div className="detail-chart-panel" style={{ height: 450 }}>
       <Line data={data} options={options} />
       <p className="chart-hint">
         Scroll to zoom, pinch to zoom on touch, and drag to explore the ECG trace.

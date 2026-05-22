@@ -1,19 +1,6 @@
-import { createClient } from '@supabase/supabase-js';
+import { createBrowserClient } from '@supabase/ssr';
 
-const supabaseUrl = process.env.SUPABASE_URL || '';
-const supabaseAnonKey = process.env.SUPABASE_ANON_KEY || '';
-
-export const supabase = createClient(supabaseUrl, supabaseAnonKey);
-
-export async function fetchData() {
-  const { data, error } = await supabase
-    .from('workouts')
-    .select('*');
-  
-  if (error) {
-    console.error('Error fetching data:', error);
-    return null;
-  }
-  
-  return data;
-}
+export const supabase = createBrowserClient(
+  process.env.SUPABASE_URL!,
+  process.env.SUPABASE_ANON_KEY!
+);
