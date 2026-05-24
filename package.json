@@ -4,7 +4,7 @@
   "description": "A web application for ingesting videos and ECG data from the Polar H10.",
   "main": "index.js",
   "scripts": {
-    "dev": "next dev",
+    "dev": "next dev --webpack",
     "build": "next build",
     "start": "next start",
     "lint": "eslint ."

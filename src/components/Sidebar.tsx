@@ -15,16 +15,6 @@ function IconActivity({ active }: { active?: boolean }) {
   );
 }
 
-function IconDashboard({ active }: { active?: boolean }) {
-  return (
-    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={active ? 2 : 1.5} strokeLinecap="round" strokeLinejoin="round">
-      <rect x="3" y="3" width="7" height="7" rx="1.5" />
-      <rect x="14" y="3" width="7" height="7" rx="1.5" />
-      <rect x="3" y="14" width="7" height="7" rx="1.5" />
-      <rect x="14" y="14" width="7" height="7" rx="1.5" />
-    </svg>
-  );
-}
 
 function IconNutrition({ active }: { active?: boolean }) {
   return (
@@ -55,12 +45,12 @@ function IconStudent({ active }: { active?: boolean }) {
   );
 }
 
-function IconUpload({ active }: { active?: boolean }) {
+
+function IconHome({ active }: { active?: boolean }) {
   return (
     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={active ? 2 : 1.5} strokeLinecap="round" strokeLinejoin="round">
-      <path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4" />
-      <polyline points="17 8 12 3 7 8" />
-      <line x1="12" y1="3" x2="12" y2="15" />
+      <path d="M3 9.5L12 3l9 6.5V20a1 1 0 01-1 1H5a1 1 0 01-1-1V9.5z" />
+      <polyline points="9 21 9 12 15 12 15 21" />
     </svg>
   );
 }
@@ -84,12 +74,11 @@ function IconMenu() {
 }
 
 const NAV_ITEMS = [
+  { href: '/dashboard', label: 'Training',  Icon: IconHome      },
+  { href: '/nutrition', label: 'Nutrition', Icon: IconNutrition },
+  { href: '/life',      label: 'Life',      Icon: IconLife      },
+  { href: '/student',   label: 'Student',   Icon: IconStudent   },
   { href: '/live',      label: 'Live',      Icon: IconActivity  },
-  { href: '/dashboard', label: 'Training',  Icon: IconDashboard },
-  { href: '/nutrition', label: 'Nutrition',  Icon: IconNutrition },
-  { href: '/life',      label: 'Life',       Icon: IconLife      },
-  { href: '/student',   label: 'Student',    Icon: IconStudent   },
-  { href: '/upload',    label: 'Upload',     Icon: IconUpload    },
 ];
 
 export default function Sidebar() {
@@ -151,7 +140,6 @@ export default function Sidebar() {
       <aside className={`sidebar ${collapsed ? 'collapsed' : ''} ${mobileOpen ? 'mobile-open' : ''}`}>
         {/* Brand */}
         <Link href="/" className="sidebar-brand">
-          <span className="sidebar-brand-mark">NXS</span>
           <span className="sidebar-brand-text">Nexus</span>
         </Link>
 

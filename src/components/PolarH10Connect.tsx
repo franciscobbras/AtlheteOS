@@ -61,7 +61,10 @@ export default function PolarH10Connect() {
     stopRecording,
   } = usePolarH10Context();
 
+  const [saveErr, setSaveErr] = useState<string | null>(null);
+
   const handleSave = useCallback(async () => {
+    setSaveErr(null);
     const summary = stopRecording();
 
     try {
@@ -82,10 +85,10 @@ export default function PolarH10Connect() {
         const body = await res.json().catch(() => null);
         throw new Error(body?.error || `HTTP ${res.status}`);
       }
-      // TODO(security): Replace alert with a toast/modal component
     } catch (err) {
-      // TODO(security): Replace alert with a toast/modal component — error display
-      console.error('Failed to save session');
+      const message = err instanceof Error ? err.message : String(err);
+      console.error('Failed to save session:', message);
+      setSaveErr(message);
     }
   }, [stopRecording]);
 
@@ -233,27 +236,34 @@ export default function PolarH10Connect() {
           </div>
 
           {/* Recording controls */}
-          <div className="inner-card" style={{ display: 'flex', alignItems: 'center', gap: 14, flexWrap: 'wrap' }}>
-            <div>
-              <div style={{ fontWeight: 600, color: 'var(--text)', marginBottom: 2, fontSize: 14 }}>Record session</div>
-              <div style={{ color: 'var(--muted)', fontSize: 12 }}>
-                Capture ECG to save to your dashboard.
+          <div className="inner-card" style={{ display: 'grid', gap: 10 }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 14, flexWrap: 'wrap' }}>
+              <div>
+                <div style={{ fontWeight: 600, color: 'var(--text)', marginBottom: 2, fontSize: 14 }}>Record session</div>
+                <div style={{ color: 'var(--muted)', fontSize: 12 }}>
+                  Capture ECG to save to your dashboard.
+                </div>
+              </div>
+              <div style={{ marginLeft: 'auto', display: 'flex', gap: 8, alignItems: 'center' }}>
+                {!recording ? (
+                  <button className="btn btn-primary btn-sm" onClick={() => { setSaveErr(null); startRecording(); }}>
+                    Start recording
+                  </button>
+                ) : (
+                  <>
+                    <RecordingBadge />
+                    <button className="btn btn-secondary btn-sm" onClick={handleSave}>
+                      Stop &amp; save
+                    </button>
+                  </>
+                )}
               </div>
             </div>
-            <div style={{ marginLeft: 'auto', display: 'flex', gap: 8, alignItems: 'center' }}>
-              {!recording ? (
-                <button className="btn btn-primary btn-sm" onClick={startRecording}>
-                  Start recording
-                </button>
-              ) : (
-                <>
-                  <RecordingBadge />
-                  <button className="btn btn-secondary btn-sm" onClick={handleSave}>
-                    Stop &amp; save
-                  </button>
-                </>
-              )}
-            </div>
+            {saveErr && (
+              <p style={{ margin: 0, padding: '8px 12px', background: 'rgba(239,68,68,0.08)', border: '1px solid rgba(239,68,68,0.2)', borderRadius: 'var(--radius-sm)', color: 'var(--error)', fontSize: 12 }}>
+                Save failed: {saveErr}
+              </p>
+            )}
           </div>
         </>
       )}

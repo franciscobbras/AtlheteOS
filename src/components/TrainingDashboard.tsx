@@ -12,6 +12,7 @@ import {
 import { useRouter } from 'next/navigation';
 import { parseECG, parseHRFile } from '@/lib/parsers';
 import { DailyReadinessSection, LoadManagementSection, AdvancedSection } from './AthleteSections';
+import { supabase } from '@/lib/supabaseClient';
 
 ChartJS.register(
   CategoryScale, LinearScale,
@@ -53,6 +54,24 @@ const TYPE_CHART: Record<string, string> = {
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
+type Session = {
+  id: string;
+  title: string;
+  type: string;
+  source: string;
+  created_at: string;
+  started_at: string | null;
+  duration_seconds: number | null;
+  notes: string | null;
+  heart_rate_avg: number | null;
+  heart_rate_max: number | null;
+  heart_rate_min: number | null;
+  rr_count: number | null;
+  ecg_frame_count: number | null;
+  ecg_sample_count: number | null;
+  quality: 'good' | 'fair' | 'poor' | null;
+};
+
 type Activity = {
   id: string;
   created_at: string;
@@ -80,13 +99,6 @@ function fmtDate(date: Date): string {
   return date.toLocaleDateString('en-GB', { day: '2-digit', month: 'short' });
 }
 
-function fmtDateTime(iso: string): string {
-  return new Date(iso).toLocaleString([], {
-    year: 'numeric', month: 'short', day: 'numeric',
-    hour: '2-digit', minute: '2-digit',
-  });
-}
-
 function fmtDuration(secs: number | null): string {
   if (!secs) return '—';
   const h = Math.floor(secs / 3600);
@@ -96,6 +108,26 @@ function fmtDuration(secs: number | null): string {
   if (m > 0) return `${m}m ${s}s`;
   return `${s}s`;
 }
+
+function fmtSessionDate(iso: string): string {
+  const d = new Date(iso);
+  const date = d.toLocaleDateString('en-GB', { day: 'numeric', month: 'short', year: 'numeric' });
+  const time = d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+  return `${date} · ${time}`;
+}
+
+function fmtMMSS(secs: number | null): string {
+  if (!secs) return '—';
+  const m = Math.floor(secs / 60).toString().padStart(2, '0');
+  const s = (secs % 60).toString().padStart(2, '0');
+  return `${m}:${s}`;
+}
+
+const QUALITY_STYLE: Record<string, { color: string; bg: string }> = {
+  good: { color: '#22C55E', bg: 'rgba(34,197,94,0.12)' },
+  fair: { color: '#F59E0B', bg: 'rgba(245,158,11,0.12)' },
+  poor: { color: '#EF4444', bg: 'rgba(239,68,68,0.12)' },
+};
 
 function fmtWeekTime(secs: number): string {
   if (!secs) return '—';
@@ -188,6 +220,11 @@ export default function TrainingDashboard() {
   const [hrPreview, setHrPreview]   = useState<string | null>(null);
   const [hrError, setHrError]       = useState<string | null>(null);
 
+  // ── Sessions state ────────────────────────────────────────────────────────
+  const [sessions, setSessions] = useState<Session[]>([]);
+  const [sessionsLoading, setSessionsLoading] = useState(true);
+  const [sessionsError, setSessionsError] = useState<string | null>(null);
+
   const load = useCallback(async () => {
     setLoading(true);
     const res = await fetch('/api/activities');
@@ -196,7 +233,26 @@ export default function TrainingDashboard() {
     setLoading(false);
   }, []);
 
+  const loadSessions = useCallback(async () => {
+    setSessionsLoading(true);
+    setSessionsError(null);
+    try {
+      const { data, error } = await supabase
+        .from('activities')
+        .select('id, title, type, source, created_at, started_at, duration_seconds, notes, heart_rate_avg, heart_rate_max, heart_rate_min, rr_count, ecg_frame_count, ecg_sample_count, quality')
+        .order('started_at', { ascending: false, nullsFirst: false })
+        .limit(20);
+      if (error) throw error;
+      setSessions((data as Session[]) ?? []);
+    } catch (err) {
+      setSessionsError(err instanceof Error ? err.message : 'Failed to load sessions');
+    } finally {
+      setSessionsLoading(false);
+    }
+  }, []);
+
   useEffect(() => { load(); }, [load]);
+  useEffect(() => { loadSessions(); }, [loadSessions]);
 
   // ── Stats ────────────────────────────────────────────────────────────────
   const weekStart    = useMemo(() => getWeekStart(), []);
@@ -343,6 +399,7 @@ export default function TrainingDashboard() {
     setDeleting(id);
     await fetch(`/api/activities/${id}`, { method: 'DELETE' });
     setActivities(prev => prev.filter(a => a.id !== id));
+    setSessions(prev => prev.filter(s => s.id !== id));
     setDeleting(null);
   }
 
@@ -382,6 +439,7 @@ export default function TrainingDashboard() {
     setShowForm(false);
     setFormBusy(false);
     load();
+    loadSessions();
   }
 
   // ── Chart options ─────────────────────────────────────────────────────────
@@ -472,15 +530,15 @@ export default function TrainingDashboard() {
       <LoadManagementSection />
       <AdvancedSection />
 
-      {/* ── Row 4: activity list ────────────────────────────────────────── */}
+      {/* ── Sessions ────────────────────────────────────────────────────── */}
       <div style={{ display: 'grid', gap: 10 }}>
 
-        {/* List header */}
+        {/* Header */}
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: 10 }}>
           <div>
-            <p className="section-label" style={{ marginBottom: 2 }}>All sessions</p>
+            <p className="section-label" style={{ marginBottom: 2 }}>Sessions</p>
             <p style={{ margin: 0, fontSize: 12, color: 'var(--muted)' }}>
-              {activities.length} {activities.length === 1 ? 'activity' : 'activities'} — click to open
+              {sessionsLoading ? 'Loading…' : `${sessions.length} session${sessions.length !== 1 ? 's' : ''} recorded`}
             </p>
           </div>
           <button
@@ -514,15 +572,12 @@ export default function TrainingDashboard() {
                   </select>
                 </div>
               </div>
-              {/* ECG file upload */}
               <div className="upload-section">
                 <label className="field-label">ECG file (optional — .csv or .txt)</label>
                 <input className="input" type="file" accept=".csv,.txt" onChange={handleEcgFile} />
                 {ecgPreview && <p className="upload-ok">{ecgPreview}</p>}
                 {ecgError   && <p className="upload-err">{ecgError}</p>}
               </div>
-
-              {/* HR file upload */}
               <div className="upload-section">
                 <label className="field-label">HR file (optional — .csv)</label>
                 <input className="input" type="file" accept=".csv" onChange={handleHrFile} />
@@ -530,9 +585,7 @@ export default function TrainingDashboard() {
                 {hrPreview && <p className="upload-ok">{hrPreview}</p>}
                 {hrError   && <p className="upload-err">{hrError}</p>}
               </div>
-
               <p style={{ fontSize: 11, color: 'var(--muted)', margin: 0 }}>— or enter manually</p>
-
               <div className="form-grid">
                 <div>
                   <label className="field-label">Duration (min)</label>
@@ -563,47 +616,82 @@ export default function TrainingDashboard() {
           </div>
         )}
 
+        {/* Loading skeleton */}
+        {sessionsLoading && (
+          <>{[1, 2, 3].map(i => (
+            <div key={i} className="card" style={{ height: 80, background: 'var(--surface-hover)', opacity: 0.5 }} />
+          ))}</>
+        )}
+
+        {/* Error */}
+        {!sessionsLoading && sessionsError && (
+          <div className="message message-error" style={{ fontSize: 13 }}>{sessionsError}</div>
+        )}
+
         {/* Empty state */}
-        {activities.length === 0 && (
+        {!sessionsLoading && !sessionsError && sessions.length === 0 && (
           <div className="card empty-state">
-            No activities yet — click &quot;+ New activity&quot; to log your first session.
+            No sessions yet — start a live session to record your first one
           </div>
         )}
 
-        {/* Activity cards */}
-        {activities.map(a => {
-          const bg = TYPE_BG[a.type]  ?? TYPE_BG.Other;
-          const fg = TYPE_FG[a.type]  ?? TYPE_FG.Other;
+        {/* Session cards */}
+        {!sessionsLoading && sessions.map(s => {
+          const bg = TYPE_BG[s.type] ?? TYPE_BG.Other;
+          const fg = TYPE_FG[s.type] ?? TYPE_FG.Other;
+          const dateStr = fmtSessionDate(s.started_at ?? s.created_at);
+          const q = s.quality;
+          const qs = q ? QUALITY_STYLE[q] : null;
           return (
             <div
-              key={a.id}
-              onClick={() => router.push(`/activities/${a.id}`)}
-              className="card card-hover"
-              style={{ display: 'grid', gridTemplateColumns: '1fr auto', alignItems: 'start', gap: 12, padding: '14px 18px' }}
+              key={s.id}
+              className="card"
+              style={{ display: 'grid', gridTemplateColumns: '1fr auto', alignItems: 'start', gap: 12, padding: '14px 18px', cursor: 'default' }}
+              onDoubleClick={() => router.push(`/activities/${s.id}`)}
             >
               <div style={{ display: 'grid', gap: 6 }}>
+                {/* Title row */}
                 <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
-                  <span style={{ fontWeight: 600, fontSize: 14, color: 'var(--text)' }}>{a.title}</span>
-                  <span className="badge" style={{ background: bg, color: fg }}>{a.type}</span>
-                  {a.source === 'live' && <span className="badge badge-accent">Live</span>}
+                  <span style={{ fontWeight: 600, fontSize: 14, color: 'var(--text)' }}>{s.title}</span>
+                  <span className="badge" style={{ background: bg, color: fg }}>{s.type}</span>
+                  {qs && (
+                    <span className="badge" style={{ background: qs.bg, color: qs.color, textTransform: 'capitalize' }}>
+                      {q}
+                    </span>
+                  )}
                 </div>
+                {/* Date + meta row */}
                 <div style={{ display: 'flex', gap: 14, flexWrap: 'wrap', color: 'var(--muted)', fontSize: 12 }}>
-                  <span>{fmtDateTime(a.created_at)}</span>
-                  {a.duration_seconds != null && <span>{fmtDuration(a.duration_seconds)}</span>}
-                  {a.heart_rate_avg   != null && <span>Avg {a.heart_rate_avg} bpm</span>}
-                  {a.heart_rate_max   != null && <span>Max {a.heart_rate_max} bpm</span>}
-                  {a.ecg && a.ecg.length > 0  && <span style={{ color: 'var(--accent)' }}>ECG</span>}
+                  <span>{dateStr}</span>
+                  <span>{fmtMMSS(s.duration_seconds)}</span>
+                  {s.heart_rate_avg != null && <span>Avg {s.heart_rate_avg} bpm</span>}
+                  {s.heart_rate_max != null && <span>Max {s.heart_rate_max} bpm</span>}
+                  {s.heart_rate_min != null && <span>Min {s.heart_rate_min} bpm</span>}
+                  {s.rr_count != null && <span>{s.rr_count} RR pkts</span>}
+                  {(s.ecg_frame_count ?? 0) > 0
+                    ? <span style={{ color: 'var(--accent)' }}>{s.ecg_frame_count} ECG frames</span>
+                    : <span>No ECG</span>
+                  }
                 </div>
-                {a.notes && <p style={{ margin: 0, color: 'var(--muted)', fontSize: 12 }}>{a.notes}</p>}
+                {s.notes && <p style={{ margin: 0, color: 'var(--muted)', fontSize: 12 }}>{s.notes}</p>}
               </div>
-              <button
-                onClick={(e) => handleDelete(a.id, e)}
-                disabled={deleting === a.id}
-                className="btn btn-danger btn-icon btn-sm"
-                title="Delete activity"
-              >
-                {deleting === a.id ? '…' : <IconTrash />}
-              </button>
+              {/* Actions */}
+              <div style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
+                <button
+                  onClick={() => router.push(`/activities/${s.id}`)}
+                  className="btn btn-secondary btn-sm"
+                >
+                  View →
+                </button>
+                <button
+                  onClick={(e) => handleDelete(s.id, e)}
+                  disabled={deleting === s.id}
+                  className="btn btn-danger btn-icon btn-sm"
+                  title="Delete"
+                >
+                  {deleting === s.id ? '…' : <IconTrash />}
+                </button>
+              </div>
             </div>
           );
         })}
