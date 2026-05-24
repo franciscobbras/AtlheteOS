@@ -8,8 +8,8 @@ export default function SignOutButton() {
 
   async function handleSignOut() {
     const supabase = createBrowserClient(
-      process.env.SUPABASE_URL!,
-      process.env.SUPABASE_ANON_KEY!
+      process.env.NEXT_PUBLIC_SUPABASE_URL!,
+      process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!
     );
     await supabase.auth.signOut();
     window.location.href = '/login';
