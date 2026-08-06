@@ -21,3 +21,9 @@ verify_jwt = true
 [functions.ingest-intraday]
 # Same rationale as ingest-wearable.
 verify_jwt = true
+
+[functions.compute-sleep-score]
+# Chamada em processo por ingest-wearable e, à mão, para recompute. Quando
+# invocada por HTTP autentica com a service_role key (satisfaz o verify_jwt),
+# como as outras. verify_jwt on, alinhado com o resto do pipeline.
+verify_jwt = true

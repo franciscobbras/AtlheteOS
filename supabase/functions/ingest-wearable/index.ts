@@ -14,6 +14,7 @@ import { ingest } from "./ingest.ts";
 import { readGoogleSecrets, writeSecret } from "./vault.ts";
 import { ReauthRequiredError } from "./google.ts";
 import { notifyOnce } from "../_shared/notify.ts";
+import { computeSleepScores, wakeDay } from "../_shared/sleep-score.ts";
 
 const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
 
@@ -64,6 +65,37 @@ Deno.serve(async (req) => {
       refreshTokenRotated = true;
     }
 
+    // Sono novo ingerido com sucesso → calcular o sleep score já, para a manhã
+    // ter score sem esperar por um cron separado. Só quando HÁ sono de facto
+    // (não em cada tick da escada de retry) e nunca em dryRun.
+    //
+    // O wake-day é derivado do end_utc do PRÓPRIO sono, não da `date` da
+    // ingestão: no inverno (UTC+0) uma noite que acaba depois da meia-noite
+    // local tem wake-day ≠ date, e reutilizar a `date` calcularia a noite errada.
+    //
+    // Isolado em try/catch: o sono já está gravado; se o cálculo falhar, é
+    // recomputável depois (via compute-sleep-score ou o runner) e NÃO pode
+    // partir a ingestão. Uma falha terminal vai para ops.notifications.
+    let sleepScore: { written: number; dates: string[] } | null = null;
+    if (!dryRun && result.sleep && result.sleepEndUtc) {
+      const wd = wakeDay(result.sleepEndUtc, result.sleepUtcOffsetSeconds ?? 0);
+      try {
+        const sc = await computeSleepScores(client, { date: wd });
+        sleepScore = { written: sc.written, dates: sc.dates };
+      } catch (scoreErr) {
+        const m = scoreErr instanceof Error ? scoreErr.message : String(scoreErr);
+        console.error(`[ingest-wearable] cálculo do sleep score falhou (sono já ingerido, wake-day ${wd}): ${m}`);
+        await notifyOnce(client, {
+          type: "metric_computation_failure",
+          severity: "error",
+          title: "Cálculo do sleep score falhou",
+          detail: m,
+          context: { wake_day: wd, ingest_date: date, metric: "sleep_score" },
+          dedupeKey: `metric_computation_failure:sleep_score:${wd}`,
+        }).catch((e) => console.error(`[ingest-wearable] falha ao gravar notificação: ${e}`));
+      }
+    }
+
     return json({
       ok: true,
       date: result.date,
@@ -74,6 +106,7 @@ Deno.serve(async (req) => {
       },
       ...(result.preview ? { preview: result.preview } : {}),
       refresh_token_rotated: refreshTokenRotated,
+      ...(sleepScore ? { sleep_score: sleepScore } : {}),
     });
   } catch (err) {
     if (err instanceof ReauthRequiredError) {

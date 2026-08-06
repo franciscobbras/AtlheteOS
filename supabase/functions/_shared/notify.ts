@@ -11,7 +11,7 @@
 // deno-lint-ignore no-explicit-any
 type Client = any;
 
-export type NotifyType = "reauth_required" | "ingestion_failure" | "data_missing";
+export type NotifyType = "reauth_required" | "ingestion_failure" | "data_missing" | "metric_computation_failure";
 export type Severity = "info" | "warning" | "error";
 
 export interface NotifyArgs {

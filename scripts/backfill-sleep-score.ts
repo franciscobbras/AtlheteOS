@@ -142,7 +142,11 @@ async function main() {
       latmin: r.context.latency_mins, conf: r.confidence,
       flags: r.context.flags.join(','), blocks: r.context.merged_blocks,
     });
-    if (r.status === 'insufficient_data') { insufficient.push(day); continue; }
+    if (r.status === 'insufficient_data') insufficient.push(day);
+    // Escreve TODAS as noites, incluindo insufficient_data (score null) — a
+    // coluna score é nullable e o mesmo faz a Edge Function compute-sleep-score,
+    // para as duas vias de escrita não divergirem. Uma noite péssima é
+    // sinalizada, não desaparece.
     rowsToWrite.push({
       date: day,
       metric_type: 'sleep_score',
@@ -183,7 +187,7 @@ async function main() {
   const lat0 = table.filter((t) => t.latmin === 0).length;
   const latAll0 = table.every((t) => t.latmin === 0 || t.latmin == null);
   console.log(`  latência 0 em ${lat0}/${table.length} noites${latAll0 ? '  ⚠️ TODAS 0 → componente possivelmente partido' : ''}`);
-  if (insufficient.length) console.log(`  ⚠️ insufficient_data (score null, NÃO escrito por score NOT NULL): ${insufficient.join(', ')}`);
+  if (insufficient.length) console.log(`  ⚠️ insufficient_data (score null, escrito para auditoria): ${insufficient.join(', ')}`);
 
   // 6. Escrever.
   if (DRY) { console.log('\n[--dry] nada escrito.'); return; }

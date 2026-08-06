@@ -32,6 +32,10 @@ export interface IngestResult {
     temp_stddev_30d: boolean;
   };
   sleep: boolean;
+  // end_utc + offset do sono ingerido, para o chamador derivar o wake-day
+  // (data-de-acordar) do próprio sono — nunca da `date` da ingestão.
+  sleepEndUtc: string | null;
+  sleepUtcOffsetSeconds: number | null;
   rotatedRefreshToken: string | null;
   // Present only on dryRun: exactly what WOULD be written, with the matched raw
   // dataPoints so field mappings can be confirmed before any write. `debug` shows
@@ -154,6 +158,8 @@ export async function ingest(
       temp_stddev_30d: temp?.stddev30d != null,
     },
     sleep: sleepRow !== null,
+    sleepEndUtc: sleepRow?.end_utc ?? null,
+    sleepUtcOffsetSeconds: sleepRow?.utc_offset_seconds ?? null,
     rotatedRefreshToken: token.rotatedRefreshToken,
     ...(dryRun
       ? {
