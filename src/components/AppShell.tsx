@@ -4,6 +4,8 @@ import { usePathname } from 'next/navigation';
 import { ReactNode, useState } from 'react';
 import Sidebar from './Sidebar';
 import Breadcrumb from './Breadcrumb';
+import AuthControl from './AuthControl';
+import MorningCheckinGate from './MorningCheckinGate';
 import Link from 'next/link';
 
 const STANDALONE_ROUTES = ['/', '/login', '/auth'];
@@ -13,7 +15,7 @@ function isStandalone(path: string): boolean {
 }
 
 const DRAWER_ITEMS = [
-  { href: '/dashboard', label: 'Training' },
+  { href: '/dashboard', label: 'Dashboard' },
   { href: '/nutrition', label: 'Nutrition' },
   { href: '/life',      label: 'Life' },
   { href: '/student',   label: 'Student' },
@@ -26,8 +28,10 @@ export default function AppShell({ children }: { children: ReactNode }) {
 
   if (isStandalone(pathname)) {
     return (
+      <>
+      <MorningCheckinGate />
       <div className="standalone-layout">
-        <header className="standalone-header">
+        <header className="standalone-header" style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
           <button
             onClick={() => setDrawerOpen(v => !v)}
             className="standalone-brand"
@@ -35,6 +39,7 @@ export default function AppShell({ children }: { children: ReactNode }) {
           >
             Nexus
           </button>
+          <AuthControl />
         </header>
 
         {drawerOpen && (
@@ -81,20 +86,25 @@ export default function AppShell({ children }: { children: ReactNode }) {
           Nexus — sync training video and ECG data with confidence.
         </footer>
       </div>
+      </>
     );
   }
 
   return (
+    <>
+    <MorningCheckinGate />
     <div className="sidebar-layout">
       <Sidebar />
       <div className="main-content">
-        <div className="main-topbar">
+        <div className="main-topbar" style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12 }}>
           <Breadcrumb />
+          <AuthControl />
         </div>
         <main className="main-body animate-fade-in">
           {children}
         </main>
       </div>
     </div>
+    </>
   );
 }

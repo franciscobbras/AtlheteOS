@@ -4,7 +4,7 @@ import Link from 'next/link';
 import { usePathname } from 'next/navigation';
 
 const LABEL_MAP: Record<string, string> = {
-  dashboard: 'Training',
+  dashboard: 'Dashboard',
   nutrition: 'Nutrition',
   life: 'Life',
   student: 'Student',

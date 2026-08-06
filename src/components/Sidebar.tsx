@@ -55,6 +55,24 @@ function IconHome({ active }: { active?: boolean }) {
   );
 }
 
+function IconCheckin({ active }: { active?: boolean }) {
+  return (
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={active ? 2 : 1.5} strokeLinecap="round" strokeLinejoin="round">
+      <path d="M9 11l3 3L22 4" />
+      <path d="M21 12v7a2 2 0 01-2 2H5a2 2 0 01-2-2V5a2 2 0 012-2h11" />
+    </svg>
+  );
+}
+
+function IconBell({ active }: { active?: boolean }) {
+  return (
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={active ? 2 : 1.5} strokeLinecap="round" strokeLinejoin="round">
+      <path d="M18 8a6 6 0 00-12 0c0 7-3 9-3 9h18s-3-2-3-9" />
+      <path d="M13.73 21a2 2 0 01-3.46 0" />
+    </svg>
+  );
+}
+
 function IconChevron() {
   return (
     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
@@ -74,11 +92,13 @@ function IconMenu() {
 }
 
 const NAV_ITEMS = [
-  { href: '/dashboard', label: 'Training',  Icon: IconHome      },
+  { href: '/dashboard', label: 'Dashboard', Icon: IconHome      },
   { href: '/nutrition', label: 'Nutrition', Icon: IconNutrition },
   { href: '/life',      label: 'Life',      Icon: IconLife      },
+  { href: '/checkin',   label: 'Check-in',  Icon: IconCheckin   },
   { href: '/student',   label: 'Student',   Icon: IconStudent   },
   { href: '/live',      label: 'Live',      Icon: IconActivity  },
+  { href: '/notifications', label: 'Notificações', Icon: IconBell },
 ];
 
 export default function Sidebar() {

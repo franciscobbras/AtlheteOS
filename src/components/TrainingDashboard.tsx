@@ -12,6 +12,7 @@ import {
 import { useRouter } from 'next/navigation';
 import { parseECG, parseHRFile } from '@/lib/parsers';
 import { DailyReadinessSection, LoadManagementSection, AdvancedSection } from './AthleteSections';
+import SleepScoreCard from './SleepScoreCard';
 import { supabase } from '@/lib/supabaseClient';
 
 ChartJS.register(
@@ -70,19 +71,6 @@ type Session = {
   ecg_frame_count: number | null;
   ecg_sample_count: number | null;
   quality: 'good' | 'fair' | 'poor' | null;
-};
-
-type Activity = {
-  id: string;
-  created_at: string;
-  title: string;
-  type: string;
-  duration_seconds: number | null;
-  notes: string | null;
-  ecg: number[] | null;
-  heart_rate_avg: number | null;
-  heart_rate_max: number | null;
-  source: string;
 };
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
@@ -197,9 +185,6 @@ export default function TrainingDashboard() {
   const router = useRouter();
 
   // ── Data state ───────────────────────────────────────────────────────────
-  const [activities, setActivities] = useState<Activity[]>([]);
-  const [loading, setLoading]       = useState(true);
-  const [error, setError]           = useState<string | null>(null);
   const [deleting, setDeleting]     = useState<string | null>(null);
 
   // ── Form state ───────────────────────────────────────────────────────────
@@ -225,14 +210,6 @@ export default function TrainingDashboard() {
   const [sessionsLoading, setSessionsLoading] = useState(true);
   const [sessionsError, setSessionsError] = useState<string | null>(null);
 
-  const load = useCallback(async () => {
-    setLoading(true);
-    const res = await fetch('/api/activities');
-    if (!res.ok) { setError('Failed to load activities'); setLoading(false); return; }
-    setActivities(await res.json());
-    setLoading(false);
-  }, []);
-
   const loadSessions = useCallback(async () => {
     setSessionsLoading(true);
     setSessionsError(null);
@@ -240,18 +217,27 @@ export default function TrainingDashboard() {
       const { data, error } = await supabase
         .from('activities')
         .select('id, title, type, source, created_at, started_at, duration_seconds, notes, heart_rate_avg, heart_rate_max, heart_rate_min, rr_count, ecg_frame_count, ecg_sample_count, quality')
-        .order('started_at', { ascending: false, nullsFirst: false })
-        .limit(20);
+        .order('started_at', { ascending: false, nullsFirst: false });
       if (error) throw error;
       setSessions((data as Session[]) ?? []);
     } catch (err) {
-      setSessionsError(err instanceof Error ? err.message : 'Failed to load sessions');
+      // A tabela public.activities não existe nesta base (feature legada do app
+      // de vídeo+ECG). Nesse caso degrada para estado vazio em vez de erro —
+      // não há sessões porque não há fonte, não porque algo falhou.
+      const e = err as { code?: string; message?: string };
+      const missingTable = e?.code === '42P01' || e?.code === 'PGRST205'
+        || /does not exist|Could not find the table|schema cache/i.test(e?.message ?? '');
+      if (missingTable) {
+        setSessions([]);
+      } else {
+        // Erros de Supabase são objetos simples (não Error): expor a mensagem real.
+        setSessionsError(e?.message ?? String(err));
+      }
     } finally {
       setSessionsLoading(false);
     }
   }, []);
 
-  useEffect(() => { load(); }, [load]);
   useEffect(() => { loadSessions(); }, [loadSessions]);
 
   // ── Stats ────────────────────────────────────────────────────────────────
@@ -259,34 +245,34 @@ export default function TrainingDashboard() {
   const sevenDaysAgo = useMemo(() => new Date(Date.now() - 7 * 24 * 60 * 60 * 1000), []);
 
   const thisWeek = useMemo(
-    () => activities.filter(a => new Date(a.created_at) >= weekStart),
-    [activities, weekStart],
+    () => sessions.filter(s => new Date(s.created_at) >= weekStart),
+    [sessions, weekStart],
   );
 
   const avgHR = useMemo(() => {
-    const vals = activities
-      .filter(a => new Date(a.created_at) >= sevenDaysAgo && a.heart_rate_avg != null)
-      .map(a => a.heart_rate_avg!);
+    const vals = sessions
+      .filter(s => new Date(s.created_at) >= sevenDaysAgo && s.heart_rate_avg != null)
+      .map(s => s.heart_rate_avg!);
     return vals.length
-      ? Math.round(vals.reduce((s, v) => s + v, 0) / vals.length)
+      ? Math.round(vals.reduce((sum, v) => sum + v, 0) / vals.length)
       : null;
-  }, [activities, sevenDaysAgo]);
+  }, [sessions, sevenDaysAgo]);
 
   const weekTime = useMemo(() => {
-    const secs = thisWeek.reduce((s, a) => s + (a.duration_seconds ?? 0), 0);
+    const secs = thisWeek.reduce((sum, s) => sum + (s.duration_seconds ?? 0), 0);
     return fmtWeekTime(secs);
   }, [thisWeek]);
 
   // ── Chart data ───────────────────────────────────────────────────────────
   const hrChartData = useMemo(() => {
-    const sessions = [...activities]
+    const recent = [...sessions]
       .sort((a, b) => new Date(a.created_at).getTime() - new Date(b.created_at).getTime())
-      .filter(a => a.heart_rate_avg != null)
+      .filter(s => s.heart_rate_avg != null)
       .slice(-30);
     return {
-      labels: sessions.map(a => fmtDate(new Date(a.created_at))),
+      labels: recent.map(s => fmtDate(new Date(s.created_at))),
       datasets: [{
-        data:                 sessions.map(a => a.heart_rate_avg),
+        data:                 recent.map(s => s.heart_rate_avg),
         borderColor:          '#EF4444',
         backgroundColor:      'rgba(239,68,68,0.06)',
         fill:                 true,
@@ -297,13 +283,13 @@ export default function TrainingDashboard() {
         borderWidth:          2,
       }],
     };
-  }, [activities]);
+  }, [sessions]);
 
   const typeChartData = useMemo(() => {
     const counts: Record<string, number> = {};
     ACTIVITY_TYPES.forEach(t => { counts[t] = 0; });
-    activities.forEach(a => {
-      const key = ACTIVITY_TYPES.includes(a.type) ? a.type : 'Other';
+    sessions.forEach(s => {
+      const key = ACTIVITY_TYPES.includes(s.type) ? s.type : 'Other';
       counts[key]++;
     });
     const labels = ACTIVITY_TYPES.filter(t => counts[t] > 0);
@@ -317,7 +303,7 @@ export default function TrainingDashboard() {
         hoverOffset:     4,
       }],
     };
-  }, [activities]);
+  }, [sessions]);
 
   const weeklyBarData = useMemo(() => {
     const now = new Date();
@@ -334,9 +320,9 @@ export default function TrainingDashboard() {
         data: weeks.map(mon => {
           const end = new Date(mon);
           end.setDate(end.getDate() + 7);
-          return activities
-            .filter(a => { const d = new Date(a.created_at); return d >= mon && d < end; })
-            .reduce((sum, a) => sum + Math.floor((a.duration_seconds ?? 0) / 60), 0);
+          return sessions
+            .filter(s => { const d = new Date(s.created_at); return d >= mon && d < end; })
+            .reduce((sum, s) => sum + Math.floor((s.duration_seconds ?? 0) / 60), 0);
         }),
         backgroundColor: 'rgba(79,140,255,0.5)',
         borderColor:     '#4F8CFF',
@@ -344,7 +330,7 @@ export default function TrainingDashboard() {
         borderRadius:    4,
       }],
     };
-  }, [activities]);
+  }, [sessions]);
 
   // ── Handlers ─────────────────────────────────────────────────────────────
   function handleEcgFile(e: React.ChangeEvent<HTMLInputElement>) {
@@ -397,8 +383,7 @@ export default function TrainingDashboard() {
   async function handleDelete(id: string, e: React.MouseEvent) {
     e.stopPropagation();
     setDeleting(id);
-    await fetch(`/api/activities/${id}`, { method: 'DELETE' });
-    setActivities(prev => prev.filter(a => a.id !== id));
+    await supabase.from('activities').delete().eq('id', id);
     setSessions(prev => prev.filter(s => s.id !== id));
     setDeleting(null);
   }
@@ -438,7 +423,6 @@ export default function TrainingDashboard() {
     setHrPreview(null); setHrError(null);
     setShowForm(false);
     setFormBusy(false);
-    load();
     loadSessions();
   }
 
@@ -478,24 +462,28 @@ export default function TrainingDashboard() {
   };
 
   // ── Render ────────────────────────────────────────────────────────────────
-  if (loading) return <div className="empty-state">Loading…</div>;
-  if (error)   return <div className="message message-error">{error}</div>;
+  // Sem early-return: o título, o Sleep Score e os gráficos renderizam sempre.
+  // O estado de sessões (loading / erro / vazio) é tratado inline na secção de
+  // sessões, para uma falha aí não apagar o dashboard todo.
 
   return (
     <div style={{ display: 'grid', gap: 16 }} className="animate-fade-in">
 
       {/* Page title */}
       <div className="page-header">
-        <h1 className="page-title">Training</h1>
+        <h1 className="page-title">Dashboard</h1>
         <p className="page-subtitle">All sessions, volume trends, and performance metrics</p>
       </div>
 
+      {/* ── Sleep score (gauge de wellbeing, valor real do dia) ─────────── */}
+      <SleepScoreCard />
+
       {/* ── Row 1: stat cards ──────────────────────────────────────────── */}
       <div className="stat-grid stagger">
-        <StatCard label="Total sessions"       value={activities.length.toString()}  color="#4F8CFF"  icon={<IconSessions />} />
-        <StatCard label="This week"            value={thisWeek.length.toString()}    color="#22C55E"  icon={<IconCalendar />} />
-        <StatCard label="Avg HR — last 7 days" value={avgHR ? `${avgHR} bpm` : '—'} color="#EF4444"  icon={<IconHeart />} />
-        <StatCard label="Time this week"       value={weekTime}                      color="#A855F7"  icon={<IconClock />} />
+        <StatCard label="Total sessions"       value={sessions.length.toString()}   color="#4F8CFF"  icon={<IconSessions />} />
+        <StatCard label="This week"            value={thisWeek.length.toString()}   color="#22C55E"  icon={<IconCalendar />} />
+        <StatCard label="Avg HR — last 7 days" value={avgHR ? `${avgHR} bpm` : '—'} color="#EF4444" icon={<IconHeart />} />
+        <StatCard label="Time this week"       value={weekTime}                     color="#A855F7"  icon={<IconClock />} />
       </div>
 
       {/* ── Row 2: HR line + type doughnut ─────────────────────────────── */}
@@ -504,13 +492,12 @@ export default function TrainingDashboard() {
           <p className="section-label">Heart rate — last 30 sessions</p>
           {hrChartData.labels.length === 0
             ? <p style={{ color: 'var(--muted)', margin: 0, fontSize: 13 }}>No HR data recorded yet.</p>
-            : <Line data={hrChartData} options={hrOptions} />
-          }
+            : <Line data={hrChartData} options={hrOptions} />}
         </div>
 
         <div className="card" style={{ display: 'flex', flexDirection: 'column' }}>
           <p className="section-label">Activity type breakdown</p>
-          {activities.length === 0
+          {sessions.length === 0
             ? <p style={{ color: 'var(--muted)', margin: 0, fontSize: 13 }}>No activities yet.</p>
             : <div style={{ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
                 <Doughnut data={typeChartData} options={doughnutOptions} />

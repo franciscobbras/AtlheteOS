@@ -20,15 +20,29 @@ export default function LoginPage() {
   async function handleGoogleSignIn() {
     setGoogleLoading(true);
     setError(null);
-    const { error } = await getSupabase().auth.signInWithOAuth({
-      provider: 'google',
-      options: { redirectTo: `${location.origin}/auth/callback` },
-    });
-    if (error) {
-      setError(error.message);
+    try {
+      const { data, error } = await getSupabase().auth.signInWithOAuth({
+        provider: 'google',
+        options: {
+          redirectTo: `${location.origin}/auth/callback`,
+          skipBrowserRedirect: true, // we navigate explicitly below
+        },
+      });
+      if (error) {
+        setError(`OAuth: ${error.message}`);
+        setGoogleLoading(false);
+        return;
+      }
+      if (data?.url) {
+        window.location.href = data.url; // go to Google's consent screen
+        return;
+      }
+      setError('signInWithOAuth devolveu sem URL e sem erro (provider Google desativado no Supabase?)');
+      setGoogleLoading(false);
+    } catch (e) {
+      setError(`Falha no cliente: ${e instanceof Error ? e.message : String(e)}`);
       setGoogleLoading(false);
     }
-    // On success the browser navigates away — no state reset needed
   }
 
   async function handleMagicLink(e: React.FormEvent) {

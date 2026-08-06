@@ -73,23 +73,6 @@ function ZonesBar({ pcts }: { pcts: number[] }) {
   );
 }
 
-function SleepBar({ rem, deep, light }: { rem: number; deep: number; light: number }) {
-  return (
-    <div style={{ marginTop: 6 }}>
-      <div style={{ display: 'flex', height: 5, borderRadius: 99, overflow: 'hidden' }}>
-        <div style={{ width: `${rem}%`, background: '#8B5CF6' }} />
-        <div style={{ width: `${deep}%`, background: '#4F8CFF' }} />
-        <div style={{ width: `${light}%`, background: '#71717A' }} />
-      </div>
-      <div style={{ display: 'flex', gap: 8, marginTop: 4 }}>
-        <span style={{ fontSize: 9, color: '#8B5CF6' }}>REM {rem}%</span>
-        <span style={{ fontSize: 9, color: '#4F8CFF' }}>Deep {deep}%</span>
-        <span style={{ fontSize: 9, color: 'var(--muted)' }}>Light {light}%</span>
-      </div>
-    </div>
-  );
-}
-
 function IC({ title, children }: { title: string; children: React.ReactNode }) {
   return (
     <div className="inner-card">
@@ -153,12 +136,6 @@ export function DailyReadinessSection() {
             <p style={{ ...VAL, margin: 0 }}>7.4<span style={{ fontSize: 12, fontWeight: 400, marginLeft: 3, color: 'var(--muted)' }}>/10</span></p>
           </div>
           <p style={{ margin: '6px 0 0', fontSize: 11, color: 'var(--muted)' }}>Ready to train</p>
-        </IC>
-
-        <IC title="Sleep">
-          <p style={VAL}>7h 20m</p>
-          <p style={{ margin: '4px 0 0', fontSize: 11, color: 'var(--muted)' }}>Efficiency 89%</p>
-          <SleepBar rem={22} deep={18} light={60} />
         </IC>
 
         <IC title="Risco de Lesão">

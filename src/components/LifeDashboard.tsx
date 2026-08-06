@@ -3,6 +3,7 @@
 import { useState } from 'react';
 import Link from 'next/link';
 import React from 'react';
+import WearableRawInspector from './WearableRawInspector';
 
 // ── Mini helpers ──────────────────────────────────────────────────────────────
 
@@ -206,13 +207,6 @@ export default function LifeDashboard() {
             <span className="badge">DEXA scan</span>
           </div>
 
-          {/* Sleep summary */}
-          <div className="inner-card">
-            <p style={{ margin: '0 0 6px', fontSize: 10, letterSpacing: '0.06em', textTransform: 'uppercase', color: 'var(--muted)', fontWeight: 600 }}>Sleep</p>
-            <p style={{ margin: 0, fontSize: 20, fontWeight: 700, color: 'var(--text)' }}>7h 20m</p>
-            <p style={{ margin: '4px 0 0', fontSize: 11, color: '#22C55E' }}>Good quality · 89% efficiency</p>
-          </div>
-
         </div>
       </div>
 
@@ -290,6 +284,9 @@ export default function LifeDashboard() {
           </div>
         </div>
       </div>
+
+      {/* ══ WEARABLE_RAW — raw data inspection tool ═════════════════════════ */}
+      <WearableRawInspector />
 
     </div>
   );

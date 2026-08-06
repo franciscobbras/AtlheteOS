@@ -44,8 +44,6 @@ export default function HomeSignalsStrip() {
   const readiness = 74;
   const hrv = 58;
   const hrvSpark = [52, 55, 61, 57, 53, 60, 58];
-  const sleepPct = 82;
-  const sleepHrs = '7h 20m';
   const tsb = -12;
   const stress = 38;
 
@@ -103,18 +101,6 @@ export default function HomeSignalsStrip() {
             </p>
             <Sparkline data={hrvSpark} color="#4F8CFF" />
             <p style={{ margin: 0, fontSize: 11, color: 'var(--muted)' }}>7-day trend</p>
-          </div>
-
-          {/* Sleep Recovery */}
-          <div className="animate-slide-up" style={sc}>
-            <p style={lbl}>Sleep Recovery</p>
-            <div style={{ position: 'relative', width: 64, height: 64 }}>
-              <ArcRing value={sleepPct} color={scoreColor(sleepPct)} />
-              <span style={{ position: 'absolute', inset: 0, display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 13, fontWeight: 700, color: scoreColor(sleepPct) }}>
-                {sleepPct}%
-              </span>
-            </div>
-            <p style={{ margin: 0, fontSize: 11, color: 'var(--muted)' }}>{sleepHrs}</p>
           </div>
 
           {/* TSB */}

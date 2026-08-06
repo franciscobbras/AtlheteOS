@@ -1,0 +1,23 @@
+# Minimal Supabase CLI config for the ingest-wearable Edge Function.
+# Link to the remote project with:  supabase link --project-ref owdabspslxibnyybtcxx
+project_id = "nexus"
+
+[api]
+enabled = true
+# PostgREST only serves listed schemas — service_role included. The Nexus data
+# schemas must be here for client.schema("…") to work. Mirror this on the REMOTE
+# project: Dashboard → Settings → API → Exposed schemas.
+schemas = ["public", "graphql_public", "wearable", "subjective", "metrics", "ops"]
+extra_search_path = ["public", "extensions"]
+
+[functions.ingest-wearable]
+# Now pg_cron-driven and reachable on a public URL on a schedule — verify_jwt
+# is back on. The cron jobs authenticate with the project's service_role key
+# (read from the Vault at call time; see 20260730000001_pg_cron_schedule.sql),
+# which satisfies JWT verification and is what the function already uses
+# internally to reach the Vault and wearable.* tables.
+verify_jwt = true
+
+[functions.ingest-intraday]
+# Same rationale as ingest-wearable.
+verify_jwt = true
