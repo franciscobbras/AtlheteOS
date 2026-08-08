@@ -504,6 +504,7 @@ export interface SRIResult {
     dias_validos: number;
     fracao_valida: number;
     pares_validos: number;
+    pares_maximos: number;
     window_days: number;
   };
 }
@@ -598,12 +599,19 @@ export function getSRI(blocks: RawSleepBlock[], cfg: SRIConfig, targetDate: stri
       agreementSum += match / M;
     }
   }
-  const fracaoValida = (N - 1) > 0 ? paresValidos / (N - 1) : 0;
+  const paresMaximos = N - 1;
+  const fracaoValida = paresMaximos > 0 ? paresValidos / paresMaximos : 0;
+  // Confidence pela RAIZ da fração de pares válidos, não linear: a incerteza
+  // estatística de uma média decresce com 1/√n, por isso 9/13 pares → √(9/13)
+  // = 0.83 (vs 0.69 linear). Janela cheia (13/13) = 1.0.
+  const confidence = paresMaximos > 0 ? Math.sqrt(paresValidos / paresMaximos) : 0;
 
+  // Gate: publica com dias_validos >= min_days (não exige janela cheia). Abaixo
+  // disso, insufficient_data. paresValidos===0 nunca é calculável.
   if (diasValidos < cfg.min_days || paresValidos === 0) {
     return {
-      score: null, drivers: [], vs_baseline: null, confidence: +fracaoValida.toFixed(3),
-      context: { status: 'insufficient_data', dias_validos: diasValidos, fracao_valida: +fracaoValida.toFixed(3), pares_validos: paresValidos, window_days: N },
+      score: null, drivers: [], vs_baseline: null, confidence: +confidence.toFixed(3),
+      context: { status: 'insufficient_data', dias_validos: diasValidos, fracao_valida: +fracaoValida.toFixed(3), pares_validos: paresValidos, pares_maximos: paresMaximos, window_days: N },
     };
   }
 
@@ -625,7 +633,7 @@ export function getSRI(blocks: RawSleepBlock[], cfg: SRIConfig, targetDate: stri
     score: +sri.toFixed(1),
     drivers,
     vs_baseline: null,
-    confidence: +fracaoValida.toFixed(3),
-    context: { status: 'ok', dias_validos: diasValidos, fracao_valida: +fracaoValida.toFixed(3), pares_validos: paresValidos, window_days: N },
+    confidence: +confidence.toFixed(3),
+    context: { status: 'ok', dias_validos: diasValidos, fracao_valida: +fracaoValida.toFixed(3), pares_validos: paresValidos, pares_maximos: paresMaximos, window_days: N },
   };
 }

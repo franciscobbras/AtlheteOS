@@ -33,7 +33,7 @@ function trendColor(d: number): string {
 
 // ── SRI (série) ───────────────────────────────────────────────────────────────
 type SriDriver = { factor: string; impact: number; detail: string };
-type SriCtx = { status: string; dias_validos: number; fracao_valida: number; pares_validos: number; window_days: number };
+type SriCtx = { status: string; dias_validos: number; fracao_valida: number; pares_validos: number; pares_maximos: number; window_days: number };
 type SriRow = { date: string; score: number | null; confidence: number | null; drivers: SriDriver[] | null; context: SriCtx | null };
 type SriPub = SriRow & { score: number };
 
@@ -312,7 +312,7 @@ function ScoreDetail({
             {sctx && (
               <p style={{ margin: '12px 0 0', fontSize: 12, color: 'var(--muted)' }}>
                 dias válidos <strong style={{ color: 'var(--text)' }}>{sctx.dias_validos}/{sctx.window_days}</strong> ·
-                fração válida <strong style={{ color: 'var(--text)' }}>{Math.round(sctx.fracao_valida * 100)}%</strong> ·
+                pares <strong style={{ color: 'var(--text)' }}>{sctx.pares_validos}/{sctx.pares_maximos}</strong> ·
                 confidence <strong style={{ color: 'var(--text)' }}>{sriLatest.confidence != null ? Math.round(sriLatest.confidence * 100) : '—'}%</strong>
               </p>
             )}
