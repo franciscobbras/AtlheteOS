@@ -458,3 +458,174 @@ export function getSleepScore(
     },
   };
 }
+
+// ============================================================================
+// SLEEP REGULARITY INDEX (SRI) — Phillips 2017
+// ============================================================================
+//
+// Métrica AUTÓNOMA (não é componente do sleep score, não entra na readiness). É
+// propriedade de um padrão de N dias, não de uma noite.
+//
+//   SRI = -100 + (200 / (M·(N-1))) · Σ_{j=1}^{N-1} Σ_{i=1}^{M} δ(s_{i,j}, s_{i,j+1})
+//
+// = concordância média entre todas as épocas separadas por 24h. Escala REAL
+// [-100, 100]: 100 = regularidade perfeita, 0 = aleatório, -100 = invertida.
+// SEM curva de mapeamento — mostra-se o valor cru.
+//
+// ESCOLHAS (todas de config, nunca hardcoded) — a fórmula não diverge entre
+// implementações; o que diverge é a definição de "a dormir". Documentado aqui:
+//  · época = epoch_seconds (30s); M = 86400/época épocas por dia.
+//  · janela deslizante = window_days (14).
+//  · "a dormir" = dentro de um período de wearable.sleep em fase light/deep/REM;
+//    segmentos AWAKE dentro do sono contam como SONO se < waso_min_minutes,
+//    como acordado se ≥. Fora de qualquer período de sono = acordado.
+//  · fronteira do dia = MEIO-DIA A MEIO-DIA (padrão publicado, não negociável) —
+//    mantém a noite inteira dentro de um "dia", não a parte à meia-noite.
+//  · agregação estilo GGIR: média sobre pares de dias consecutivos VÁLIDOS (não
+//    exige 14 dias sem falhas). Um dia é válido se tiver dados de sono.
+//  · gate: dias válidos < min_days ⇒ não publica (insufficient_data).
+
+export interface SRIConfig {
+  epoch_seconds: number;
+  window_days: number;
+  waso_min_minutes: number;
+  min_days: number;
+}
+
+export interface SRIDriver { factor: string; impact: number; detail: string }
+
+export interface SRIResult {
+  score: number | null; // SRI cru [-100, 100], ou null se insufficient_data
+  drivers: SRIDriver[];
+  vs_baseline: null;
+  confidence: number;
+  context: {
+    status: 'ok' | 'insufficient_data';
+    dias_validos: number;
+    fracao_valida: number;
+    pares_validos: number;
+    window_days: number;
+  };
+}
+
+// Intervalos "a dormir" em ms de RELÓGIO LOCAL (utcMs + offset), com WASO
+// aplicado. Sem stages, o bloco inteiro conta como sono.
+function asleepIntervalsLocalMs(blocks: RawSleepBlock[], wasoMinMs: number): Array<[number, number]> {
+  const ivs: Array<[number, number]> = [];
+  for (const b of blocks) {
+    const off = b.utc_offset_seconds * 1000;
+    if (b.stages && b.stages.length > 0) {
+      for (const s of b.stages) {
+        const t = s.type.toUpperCase();
+        const st = Date.parse(s.startTime) + off;
+        const en = Date.parse(s.endTime) + off;
+        const isSleepStage = t === 'LIGHT' || t === 'DEEP' || t === 'REM';
+        const shortWake = t === 'AWAKE' && (en - st) < wasoMinMs;
+        if (isSleepStage || shortWake) ivs.push([st, en]);
+      }
+    } else {
+      ivs.push([Date.parse(b.start_utc) + off, Date.parse(b.end_utc) + off]);
+    }
+  }
+  ivs.sort((a, b) => a[0] - b[0]);
+  const merged: Array<[number, number]> = [];
+  for (const iv of ivs) {
+    const last = merged[merged.length - 1];
+    if (last && iv[0] <= last[1]) last[1] = Math.max(last[1], iv[1]);
+    else merged.push([iv[0], iv[1]]);
+  }
+  return merged;
+}
+
+function localNoonMs(ymd: string): number { return Date.parse(`${ymd}T12:00:00.000Z`); }
+function addDaysYMD(ymd: string, n: number): string {
+  const d = new Date(`${ymd}T00:00:00.000Z`);
+  d.setUTCDate(d.getUTCDate() + n);
+  return d.toISOString().slice(0, 10);
+}
+
+/**
+ * SRI para `targetDate`, sobre a janela de `window_days` dias meio-a-meio-dia
+ * que termina na véspera de targetDate (o último dia contém a noite de
+ * targetDate). `blocks` = todos os wearable.sleep que tocam a janela. Puro.
+ */
+export function getSRI(blocks: RawSleepBlock[], cfg: SRIConfig, targetDate: string): SRIResult {
+  const epochMs = cfg.epoch_seconds * 1000;
+  const M = Math.round(86400 / cfg.epoch_seconds);
+  const N = cfg.window_days;
+  const wasoMinMs = cfg.waso_min_minutes * 60000;
+
+  const intervals = asleepIntervalsLocalMs(blocks, wasoMinMs);
+  const isAsleep = (t: number): boolean => {
+    let lo = 0, hi = intervals.length - 1;
+    while (lo <= hi) {
+      const mid = (lo + hi) >> 1;
+      if (intervals[mid][1] <= t) lo = mid + 1;      // intervalo acaba em/antes de t
+      else if (intervals[mid][0] > t) hi = mid - 1;  // intervalo começa depois de t
+      else return true;                               // start <= t < end
+    }
+    return false;
+  };
+
+  // Dias (início) da janela: [D-N .. D-1]. O dia D-1 contém a noite de D.
+  const state: Uint8Array[] = [];
+  const dayValid: boolean[] = [];
+  const onsetMin: Array<number | null> = [];
+  const wakeMin: Array<number | null> = [];
+  for (let d = 0; d < N; d++) {
+    const dayStart = localNoonMs(addDaysYMD(targetDate, -N + d));
+    const arr = new Uint8Array(M);
+    let first = -1, last = -1;
+    for (let i = 0; i < M; i++) {
+      if (isAsleep(dayStart + i * epochMs)) { arr[i] = 1; if (first < 0) first = i; last = i; }
+    }
+    state.push(arr);
+    const valid = first >= 0;
+    dayValid.push(valid);
+    onsetMin.push(valid ? (first * cfg.epoch_seconds) / 60 : null);
+    wakeMin.push(valid ? ((last + 1) * cfg.epoch_seconds) / 60 : null);
+  }
+
+  const diasValidos = dayValid.filter(Boolean).length;
+  let paresValidos = 0;
+  let agreementSum = 0; // Σ (épocas concordantes / M) sobre pares válidos
+  for (let d = 0; d < N - 1; d++) {
+    if (dayValid[d] && dayValid[d + 1]) {
+      paresValidos++;
+      const a = state[d], b = state[d + 1];
+      let match = 0;
+      for (let i = 0; i < M; i++) if (a[i] === b[i]) match++;
+      agreementSum += match / M;
+    }
+  }
+  const fracaoValida = (N - 1) > 0 ? paresValidos / (N - 1) : 0;
+
+  if (diasValidos < cfg.min_days || paresValidos === 0) {
+    return {
+      score: null, drivers: [], vs_baseline: null, confidence: +fracaoValida.toFixed(3),
+      context: { status: 'insufficient_data', dias_validos: diasValidos, fracao_valida: +fracaoValida.toFixed(3), pares_validos: paresValidos, window_days: N },
+    };
+  }
+
+  const sri = -100 + 200 * (agreementSum / paresValidos);
+
+  // Drivers: amplitude (max−min) da hora de deitar/acordar nos dias válidos.
+  // Minutos desde o meio-dia (frame meio-a-meio-dia → sem wrap à meia-noite).
+  // Descritivo: com sesta antes da noite, o "onset" pode ser a sesta.
+  const onsets = onsetMin.filter((x): x is number => x != null);
+  const wakes = wakeMin.filter((x): x is number => x != null);
+  const range = (xs: number[]) => (xs.length ? Math.max(...xs) - Math.min(...xs) : 0);
+  const fmt = (min: number) => { const h = Math.floor(min / 60), m = Math.round(min % 60); return h > 0 ? `${h}h${String(m).padStart(2, '0')}m` : `${m}m`; };
+  const drivers: SRIDriver[] = [
+    { factor: 'hora de deitar', impact: -Math.round(range(onsets)), detail: `amplitude de ${fmt(range(onsets))} nos ${diasValidos} dias válidos` },
+    { factor: 'hora de acordar', impact: -Math.round(range(wakes)), detail: `amplitude de ${fmt(range(wakes))} nos ${diasValidos} dias válidos` },
+  ].sort((a, b) => a.impact - b.impact); // maior amplitude (mais negativo) primeiro
+
+  return {
+    score: +sri.toFixed(1),
+    drivers,
+    vs_baseline: null,
+    confidence: +fracaoValida.toFixed(3),
+    context: { status: 'ok', dias_validos: diasValidos, fracao_valida: +fracaoValida.toFixed(3), pares_validos: paresValidos, window_days: N },
+  };
+}

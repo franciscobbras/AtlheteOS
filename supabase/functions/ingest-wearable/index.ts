@@ -15,6 +15,7 @@ import { readGoogleSecrets, writeSecret } from "./vault.ts";
 import { ReauthRequiredError } from "./google.ts";
 import { notifyOnce } from "../_shared/notify.ts";
 import { computeSleepScores, wakeDay } from "../_shared/sleep-score.ts";
+import { computeSRI } from "../_shared/sri.ts";
 
 const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
 
@@ -77,6 +78,7 @@ Deno.serve(async (req) => {
     // recomputável depois (via compute-sleep-score ou o runner) e NÃO pode
     // partir a ingestão. Uma falha terminal vai para ops.notifications.
     let sleepScore: { written: number; dates: string[] } | null = null;
+    let sri: { written: number; published: string[] } | null = null;
     if (!dryRun && result.sleep && result.sleepEndUtc) {
       const wd = wakeDay(result.sleepEndUtc, result.sleepUtcOffsetSeconds ?? 0);
       try {
@@ -94,6 +96,25 @@ Deno.serve(async (req) => {
           dedupeKey: `metric_computation_failure:sleep_score:${wd}`,
         }).catch((e) => console.error(`[ingest-wearable] falha ao gravar notificação: ${e}`));
       }
+      // SRI: métrica autónoma da janela de 14 dias que TERMINA nesta noite —
+      // depende dos 14 dias anteriores, por isso computeSRI lê a janela inteira.
+      // Isolada em try/catch próprio: falhar aqui não afeta o sleep score nem a
+      // ingestão (o sono já está gravado; é recomputável).
+      try {
+        const sr = await computeSRI(client, { date: wd });
+        sri = { written: sr.written, published: sr.published };
+      } catch (sriErr) {
+        const m = sriErr instanceof Error ? sriErr.message : String(sriErr);
+        console.error(`[ingest-wearable] cálculo do SRI falhou (sono já ingerido, wake-day ${wd}): ${m}`);
+        await notifyOnce(client, {
+          type: "metric_computation_failure",
+          severity: "error",
+          title: "Cálculo do SRI falhou",
+          detail: m,
+          context: { wake_day: wd, ingest_date: date, metric: "sri" },
+          dedupeKey: `metric_computation_failure:sri:${wd}`,
+        }).catch((e) => console.error(`[ingest-wearable] falha ao gravar notificação: ${e}`));
+      }
     }
 
     return json({
@@ -107,6 +128,7 @@ Deno.serve(async (req) => {
       ...(result.preview ? { preview: result.preview } : {}),
       refresh_token_rotated: refreshTokenRotated,
       ...(sleepScore ? { sleep_score: sleepScore } : {}),
+      ...(sri ? { sri } : {}),
     });
   } catch (err) {
     if (err instanceof ReauthRequiredError) {

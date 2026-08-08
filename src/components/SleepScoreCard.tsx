@@ -1,52 +1,19 @@
 'use client';
 
 /**
- * Card compacto de Sleep Score (só o tamanho do gauge). Lê o valor real mais
- * recente de metrics.daily_scores (metric_type='sleep_score') — é sempre o
- * presente, por isso não mostra a data no card. Clicar abre um ecrã de detalhe
- * com a decomposição completa do score (cada componente colorido pela sua
- * contribuição) e o check-in subjetivo desse dia ao lado.
+ * Card compacto de Sleep Score (só o tamanho do gauge) + uma leitura mínima do
+ * SRI (Sleep Regularity Index), que pertence a este cartão: no card só o valor
+ * atual do SRI e a sua tendência; o detalhe completo do SRI vive no modal, que
+ * abre ao clicar (junto da decomposição do score e do check-in).
  *
- * O score é derivado/recalculável; este componente só LÊ. Cálculo em
- * src/lib/metrics.ts, materializado pelo runner de backfill/recompute.
+ * Lê o score DO DIA (metrics.daily_scores, sleep_score, wake-day de hoje) via
+ * DayDataContext, e a série do SRI (metric_type='sri'). Só LÊ; cálculo em
+ * src/lib/metrics.ts, materializado pela Edge Function / runner.
  */
 
 import { useEffect, useState } from 'react';
 import { supabase } from '@/lib/supabaseClient';
-
-type Drivers = {
-  fragmentation: { ratio: number | null; points: number | null };
-  deep: { frac: number | null; points: number | null };
-  rem: { frac: number | null; points: number | null };
-  latency: { mins: number | null; points: number | null };
-  duration_factor: number;
-  architecture: number | null;
-  shift: number;
-  tst_hours: number;
-};
-type Ctx = {
-  status: string;
-  flags: string[];
-  merged_blocks: number;
-  inter_block_waso_mins: number;
-  tst_minutes: number;
-  sleep_period_minutes: number;
-  latency_mins: number | null;
-};
-type ScoreRow = {
-  date: string;
-  score: number | null;
-  confidence: number | null;
-  config_version: string | null;
-  drivers: Drivers | null;
-  context: Ctx | null;
-};
-type Checkin = {
-  sleep_perceived: number | null;
-  recovery_feeling: number | null;
-  mood_energy: number | null;
-  notes: string | null;
-};
+import { useDayData, type DayScore, type DayCheckin } from '@/contexts/DayDataContext';
 
 // 0–100 → cor (mesmos limiares do wellbeing).
 function scoreColor(v: number): string {
@@ -59,11 +26,21 @@ function subColor(v: number): string {
 function arrow(points: number): string {
   return points >= 67 ? '▲' : points >= 34 ? '▬' : '▼';
 }
+// Tendência do SRI: sobe = verde, desce = vermelho, estável = neutro.
+function trendColor(d: number): string {
+  return d > 0.5 ? '#22C55E' : d < -0.5 ? '#EF4444' : 'var(--muted)';
+}
+
+// ── SRI (série) ───────────────────────────────────────────────────────────────
+type SriDriver = { factor: string; impact: number; detail: string };
+type SriCtx = { status: string; dias_validos: number; fracao_valida: number; pares_validos: number; window_days: number };
+type SriRow = { date: string; score: number | null; confidence: number | null; drivers: SriDriver[] | null; context: SriCtx | null };
+type SriPub = SriRow & { score: number };
 
 // Anel de progresso 3/4 de volta, igual ao gauge de wellbeing.
 function ArcRing({ value, color, size = 128 }: { value: number; color: string; size?: number }) {
-  const stroke = Math.max(5, Math.round(size / 16));   // escala com o tamanho
-  const r = size / 2 - stroke - 4;                       // raio proporcional (não transborda o SVG)
+  const stroke = Math.max(5, Math.round(size / 16));
+  const r = size / 2 - stroke - 4;
   const cx = size / 2, cy = size / 2;
   const C = 2 * Math.PI * r;
   const arcLen = 0.75 * C;
@@ -80,34 +57,34 @@ function ArcRing({ value, color, size = 128 }: { value: number; color: string; s
   );
 }
 
+function Sparkline({ data, w = 640, h = 70, color = '#22C55E' }: { data: number[]; w?: number; h?: number; color?: string }) {
+  if (data.length < 2) return null;
+  const mn = Math.min(...data), mx = Math.max(...data), rng = mx - mn || 1;
+  const pts = data.map((v, i) => `${((i / (data.length - 1)) * w).toFixed(1)},${(h - 4 - ((v - mn) / rng) * (h - 8)).toFixed(1)}`).join(' ');
+  return (
+    <svg width={w} height={h} viewBox={`0 0 ${w} ${h}`} preserveAspectRatio="none" style={{ display: 'block', width: '100%', height: h }}>
+      <polyline points={pts} fill="none" stroke={color} strokeWidth={2} strokeLinecap="round" strokeLinejoin="round" />
+    </svg>
+  );
+}
+
 export default function SleepScoreCard() {
-  const [row, setRow] = useState<ScoreRow | null | undefined>(undefined); // undefined = a carregar
-  const [checkin, setCheckin] = useState<Checkin | null>(null);
+  const { loading, score: row, checkin } = useDayData();
+  const [sriRows, setSriRows] = useState<SriRow[] | null>(null);
   const [open, setOpen] = useState(false);
 
   useEffect(() => {
     (async () => {
       const { data, error } = await supabase
         .schema('metrics').from('daily_scores')
-        .select('date, score, confidence, config_version, drivers, context')
-        .eq('metric_type', 'sleep_score')
-        .order('date', { ascending: false })
-        .limit(1)
-        .maybeSingle();
-      const r = error ? null : (data as ScoreRow | null);
-      setRow(r);
-      if (r?.date) {
-        const { data: ci } = await supabase
-          .schema('subjective').from('morning_checkin')
-          .select('sleep_perceived, recovery_feeling, mood_energy, notes')
-          .eq('date', r.date)
-          .maybeSingle();
-        setCheckin((ci as Checkin) ?? null);
-      }
+        .select('date, score, confidence, drivers, context')
+        .eq('metric_type', 'sri')
+        .order('date', { ascending: true })
+        .limit(60);
+      setSriRows(error ? [] : ((data as SriRow[]) ?? []));
     })();
   }, []);
 
-  // Fecha o modal com Escape.
   useEffect(() => {
     if (!open) return;
     const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') setOpen(false); };
@@ -120,12 +97,17 @@ export default function SleepScoreCard() {
   const color = score != null ? scoreColor(score) : 'var(--muted)';
   const clickable = score != null;
 
+  const sriPub: SriPub[] = (sriRows ?? []).filter((r): r is SriPub => r.score != null);
+  const sriLatest = sriPub.length ? sriPub[sriPub.length - 1] : null;
+  const refIdx = Math.max(0, sriPub.length - 8);
+  const sriDelta = sriLatest && sriPub.length >= 2 ? sriLatest.score - sriPub[refIdx].score : null;
+
   return (
     <>
       <button
         onClick={() => clickable && setOpen(true)}
         disabled={!clickable}
-        title={clickable ? 'Ver decomposição do score' : undefined}
+        title={clickable ? 'Ver decomposição do score e SRI' : (loading ? undefined : 'Sem score de hoje ainda — o sono desta noite ainda não foi calculado')}
         className="card"
         style={{
           display: 'inline-flex', flexDirection: 'column', alignItems: 'center', gap: 2,
@@ -140,7 +122,7 @@ export default function SleepScoreCard() {
           <ArcRing value={score ?? 0} color={color} />
           <div style={{ position: 'absolute', inset: 0, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center' }}>
             <span style={{ fontSize: 36, fontWeight: 700, lineHeight: 1, color }}>
-              {row === undefined ? '·' : score != null ? score : '—'}
+              {loading ? '·' : score != null ? score : '—'}
             </span>
             <span style={{ fontSize: 10, color: 'var(--muted)', marginTop: 2 }}>/ 100</span>
           </div>
@@ -148,10 +130,28 @@ export default function SleepScoreCard() {
         <span style={{ fontSize: 11, color: 'var(--muted)' }}>
           confidence — <strong style={{ color: 'var(--text)', fontVariantNumeric: 'tabular-nums' }}>{conf != null ? `${conf}%` : '—'}</strong>
         </span>
+        {/* SRI mínimo: valor + tendência (verde). Detalhe no modal. */}
+        <span style={{ fontSize: 11, color: 'var(--muted)', marginTop: 2 }}>
+          SRI{' '}
+          {sriLatest != null ? (
+            <>
+              <strong style={{ color: '#22C55E', fontVariantNumeric: 'tabular-nums' }}>{sriLatest.score.toFixed(1)}</strong>
+              {sriDelta != null && (
+                <strong style={{ color: trendColor(sriDelta), marginLeft: 6, fontVariantNumeric: 'tabular-nums' }}>
+                  {sriDelta > 0 ? '▲' : sriDelta < 0 ? '▼' : '▬'}{Math.abs(sriDelta).toFixed(1)}
+                </strong>
+              )}
+            </>
+          ) : '—'}
+        </span>
       </button>
 
       {open && row && score != null && (
-        <ScoreDetail row={row} score={score} conf={conf} color={color} checkin={checkin} onClose={() => setOpen(false)} />
+        <ScoreDetail
+          row={row} score={score} conf={conf} color={color} checkin={checkin}
+          sriPub={sriPub} sriLatest={sriLatest}
+          onClose={() => setOpen(false)}
+        />
       )}
     </>
   );
@@ -159,9 +159,10 @@ export default function SleepScoreCard() {
 
 // ── Modal de detalhe ────────────────────────────────────────────────────────
 function ScoreDetail({
-  row, score, conf, color, checkin, onClose,
+  row, score, conf, color, checkin, sriPub, sriLatest, onClose,
 }: {
-  row: ScoreRow; score: number; conf: number | null; color: string; checkin: Checkin | null; onClose: () => void;
+  row: DayScore; score: number; conf: number | null; color: string; checkin: DayCheckin | null;
+  sriPub: SriPub[]; sriLatest: SriPub | null; onClose: () => void;
 }) {
   const d = row.drivers;
   const ctx = row.context;
@@ -185,10 +186,11 @@ function ScoreDetail({
   };
   const th: React.CSSProperties = { fontSize: 10, letterSpacing: '0.06em', textTransform: 'uppercase', color: 'var(--muted)', fontWeight: 600, textAlign: 'left', paddingBottom: 6 };
   const numCell: React.CSSProperties = { textAlign: 'right', fontVariantNumeric: 'tabular-nums' };
+  const sctx = sriLatest?.context;
 
   return (
     <div role="dialog" aria-modal="true" style={overlay} onClick={onClose}>
-      <div className="card" style={{ width: '100%', maxWidth: 720, maxHeight: '92vh', overflowY: 'auto' }} onClick={(e) => e.stopPropagation()}>
+      <div className="card" style={{ width: '100%', maxWidth: 720, maxHeight: '92dvh', overflowY: 'auto' }} onClick={(e) => e.stopPropagation()}>
         {/* Cabeçalho */}
         <div style={{ display: 'flex', alignItems: 'center', gap: 16, marginBottom: 18 }}>
           <div style={{ position: 'relative', width: 88, height: 88, flexShrink: 0 }}>
@@ -245,7 +247,6 @@ function ScoreDetail({
               </tbody>
             </table>
 
-            {/* Duração + flags */}
             {d && (
               <p style={{ margin: '10px 0 0', fontSize: 12, color: 'var(--muted)' }}>
                 TST <strong style={{ color: 'var(--text)' }}>{d.tst_hours.toFixed(2)}h</strong>
@@ -290,6 +291,43 @@ function ScoreDetail({
             )}
           </div>
         </div>
+
+        {/* Sleep Regularity (SRI) — série + detalhe */}
+        {sriLatest && (
+          <div style={{ marginTop: 20, borderTop: '1px solid var(--border)', paddingTop: 16 }}>
+            <div style={{ display: 'flex', alignItems: 'baseline', justifyContent: 'space-between', gap: 8 }}>
+              <p className="section-label" style={{ margin: 0 }}>Sleep Regularity · SRI</p>
+              <span style={{ fontSize: 10, color: 'var(--muted)' }}>−100 … 100 (valor cru)</span>
+            </div>
+            <div style={{ display: 'flex', alignItems: 'flex-end', gap: 12, margin: '6px 0 10px' }}>
+              <span style={{ fontSize: 30, fontWeight: 700, lineHeight: 1, color: '#22C55E', fontVariantNumeric: 'tabular-nums' }}>{sriLatest.score.toFixed(1)}</span>
+              <span style={{ fontSize: 12, color: 'var(--muted)', marginBottom: 3 }}>atual ({sriLatest.date})</span>
+            </div>
+            <Sparkline data={sriPub.map((r) => r.score)} />
+            <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 10, color: 'var(--muted)', marginTop: 2 }}>
+              <span>{sriPub[0].date} · min {Math.min(...sriPub.map((r) => r.score)).toFixed(1)}</span>
+              <span>max {Math.max(...sriPub.map((r) => r.score)).toFixed(1)} · {sriPub[sriPub.length - 1].date}</span>
+            </div>
+
+            {sctx && (
+              <p style={{ margin: '12px 0 0', fontSize: 12, color: 'var(--muted)' }}>
+                dias válidos <strong style={{ color: 'var(--text)' }}>{sctx.dias_validos}/{sctx.window_days}</strong> ·
+                fração válida <strong style={{ color: 'var(--text)' }}>{Math.round(sctx.fracao_valida * 100)}%</strong> ·
+                confidence <strong style={{ color: 'var(--text)' }}>{sriLatest.confidence != null ? Math.round(sriLatest.confidence * 100) : '—'}%</strong>
+              </p>
+            )}
+            {sriLatest.drivers && sriLatest.drivers.length > 0 && (
+              <div style={{ display: 'grid', gap: 6, marginTop: 10 }}>
+                {sriLatest.drivers.map((dr) => (
+                  <div key={dr.factor} style={{ display: 'flex', justifyContent: 'space-between', gap: 8, fontSize: 12.5 }}>
+                    <span style={{ color: 'var(--text)', fontWeight: 600 }}>{dr.factor}</span>
+                    <span style={{ color: 'var(--muted)' }}>{dr.detail}</span>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+        )}
       </div>
 
       <style>{`

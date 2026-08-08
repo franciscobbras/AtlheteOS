@@ -55,7 +55,9 @@ function Scale({ label, value, onPick }: { label: string; value: number | null; 
   return (
     <div style={{ marginBottom: 18 }}>
       <p style={{ margin: '0 0 8px', fontSize: 14, fontWeight: 600, color: 'var(--text)' }}>{label}</p>
-      <div style={{ display: 'flex', gap: 5, flexWrap: 'wrap' }}>
+      {/* Grelha de 11 colunas iguais: preenche sempre a largura, nunca transborda
+          nem faz wrap — no telemóvel os botões encolhem em vez de partir a linha. */}
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(11, 1fr)', gap: 4 }}>
         {Array.from({ length: 11 }, (_, n) => {
           const on = value === n;
           return (
@@ -65,8 +67,8 @@ function Scale({ label, value, onPick }: { label: string; value: number | null; 
               onClick={() => onPick(n)}
               aria-pressed={on}
               style={{
-                width: 34, height: 38, borderRadius: 8, cursor: 'pointer',
-                fontSize: 13, fontWeight: 700,
+                width: '100%', minWidth: 0, height: 40, padding: 0, borderRadius: 8, cursor: 'pointer',
+                fontSize: 13, fontWeight: 700, touchAction: 'manipulation',
                 border: `1px solid ${on ? '#6366F1' : 'var(--border)'}`,
                 background: on ? '#6366F1' : 'var(--surface)',
                 color: on ? '#fff' : 'var(--muted)',

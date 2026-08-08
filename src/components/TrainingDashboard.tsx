@@ -207,7 +207,11 @@ export default function TrainingDashboard() {
 
   // ── Sessions state ────────────────────────────────────────────────────────
   const [sessions, setSessions] = useState<Session[]>([]);
-  const [sessionsLoading, setSessionsLoading] = useState(true);
+  // Não carrega no arranque: a tabela public.activities não existe nesta base
+  // (feature legada do app de vídeo+ECG) e a chamada dava 404 ~1s no caminho
+  // crítico do dashboard. Fica isolada — só corre se for pedida explicitamente
+  // (criar/apagar sessão). Ver loadSessions abaixo.
+  const [sessionsLoading, setSessionsLoading] = useState(false);
   const [sessionsError, setSessionsError] = useState<string | null>(null);
 
   const loadSessions = useCallback(async () => {
@@ -238,7 +242,7 @@ export default function TrainingDashboard() {
     }
   }, []);
 
-  useEffect(() => { loadSessions(); }, [loadSessions]);
+  // (sem auto-load de sessões no arranque — ver nota em sessionsLoading)
 
   // ── Stats ────────────────────────────────────────────────────────────────
   const weekStart    = useMemo(() => getWeekStart(), []);
@@ -475,7 +479,7 @@ export default function TrainingDashboard() {
         <p className="page-subtitle">All sessions, volume trends, and performance metrics</p>
       </div>
 
-      {/* ── Sleep score (gauge de wellbeing, valor real do dia) ─────────── */}
+      {/* ── Sleep score + SRI (o SRI pertence a este cartão; detalhe no modal) ── */}
       <SleepScoreCard />
 
       {/* ── Row 1: stat cards ──────────────────────────────────────────── */}
