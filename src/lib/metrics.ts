@@ -637,3 +637,127 @@ export function getSRI(blocks: RawSleepBlock[], cfg: SRIConfig, targetDate: stri
     context: { status: 'ok', dias_validos: diasValidos, fracao_valida: +fracaoValida.toFixed(3), pares_validos: paresValidos, pares_maximos: paresMaximos, window_days: N },
   };
 }
+
+
+// ═══════════════════════════════════════════════════════════════════════════
+// resolveHeartRateSource — série de HR unificada para um intervalo de treino.
+//
+// Pura, determinística, sem IO nem relógio — mesma disciplina do getSleepScore
+// e do getSRI. O chamador faz a leitura da base e passa as amostras cruas; esta
+// função só decide a fonte e agrega à resolução de apresentação.
+//
+// HIERARQUIA (decidida, não reabrir), POR BLOCO — o H10 pode ter sido posto a
+// meio do treino:
+//   1. Se houver RR do Polar H10 a cobrir o bloco → usar H10 nesse bloco
+//   2. Senão → usar wearable.heart_rate (Fitbit Air)
+//   3. NUNCA somar as duas fontes — cada bucket usa exatamente UMA
+//
+// O H10 (training.rr_intervals) AINDA NÃO EXISTE: passa-se `h10 = []` e todos os
+// blocos caem para Air. A estrutura fica correta desde já; quando a fatia do H10
+// chegar, basta alimentar as amostras — nada aqui muda.
+//
+// RESOLUÇÃO DE APRESENTAÇÃO: as fontes têm densidades diferentes (H10 ~1/s, Air
+// ~1 a cada 2-3s). Ambas saem em buckets de `bucket_seconds` (parâmetro), média
+// por bucket, alinhados ao epoch absoluto — para que sessões diferentes sejam
+// comparáveis à vista. Sem interpolação: buckets sem amostra da fonte escolhida
+// são omitidos (o gráfico mostra o buraco em vez de o inventar).
+//
+// O consumidor real hoje é o gráfico da sessão; o training_load (TRIMP) vai
+// usar exatamente esta função — por isso vive aqui, nasce testada.
+// ═══════════════════════════════════════════════════════════════════════════
+
+/** Amostra já em BPM (wearable.heart_rate, Fitbit Air). */
+export interface HrSample { t_ms: number; bpm: number }
+/** Amostra crua de RR do Polar H10 (training.rr_intervals, futura). */
+export interface RrSample { t_ms: number; rr_ms: number }
+/** Bloco = aparelho + os seus segmentos de trabalho (spans [início,fim] em ms). */
+export interface HrBlockSpan { apparatus_id: string; segments: Array<[number, number]> }
+export interface HrSourceConfig { bucket_seconds: number }
+
+export type HrSourceUsed = 'h10' | 'air' | 'mixed' | 'none';
+/** Um ponto da série de apresentação (início do bucket + média). */
+export interface HrBucket { t_ms: number; bpm: number; n: number; source: 'h10' | 'air' }
+export interface HrSeriesResult {
+  source: HrSourceUsed;
+  bucket_seconds: number;
+  buckets: HrBucket[];
+  per_block_source: Array<{ apparatus_id: string; source: 'h10' | 'air' }>;
+}
+
+function inAnySpan(t: number, spans: Array<[number, number]>): boolean {
+  for (const [a, b] of spans) if (t >= a && t < b) return true;
+  return false;
+}
+
+export function resolveHeartRateSource(
+  interval: { from_ms: number; to_ms: number },
+  air: HrSample[],
+  h10: RrSample[],
+  blocks: HrBlockSpan[],
+  cfg: HrSourceConfig,
+): HrSeriesResult {
+  const bucket = Math.max(1, Math.round(cfg.bucket_seconds));
+  const bucketMs = bucket * 1000;
+  const { from_ms, to_ms } = interval;
+
+  // RR → BPM instantâneo (60000/rr). Descarta valores não fisiológicos.
+  const h10Bpm: HrSample[] = [];
+  for (const s of h10) {
+    if (s.rr_ms > 0 && s.t_ms >= from_ms && s.t_ms < to_ms) {
+      const bpm = 60000 / s.rr_ms;
+      if (bpm >= 20 && bpm <= 240) h10Bpm.push({ t_ms: s.t_ms, bpm });
+    }
+  }
+  const airIn = air.filter((s) => s.t_ms >= from_ms && s.t_ms < to_ms);
+
+  // Decisão POR BLOCO: H10 se tiver ao menos uma amostra dentro dos segmentos
+  // do bloco; senão Air. (Presença basta — a cobertura fina resolve-se no
+  // bucketing, que só usa a fonte escolhida.)
+  const perBlock: Array<{ apparatus_id: string; source: 'h10' | 'air'; segments: Array<[number, number]> }> = [];
+  for (const b of blocks) {
+    const hasH10 = h10Bpm.some((s) => inAnySpan(s.t_ms, b.segments));
+    perBlock.push({ apparatus_id: b.apparatus_id, source: hasH10 ? 'h10' : 'air', segments: b.segments });
+  }
+
+  // Fonte de um instante: a do bloco que o contém; fora de qualquer bloco
+  // (pausa/tempo livre) cai para Air, a fonte de base.
+  const sourceAt = (t: number): 'h10' | 'air' => {
+    for (const b of perBlock) if (inAnySpan(t, b.segments)) return b.source;
+    return 'air';
+  };
+
+  // Acumula por bucket, separando por fonte; no fim escolhe a fonte do bucket
+  // (pelo seu início) e usa SÓ essa — as fontes nunca se somam.
+  type Acc = { h10Sum: number; h10N: number; airSum: number; airN: number };
+  const accs = new Map<number, Acc>();
+  const put = (t: number, bpm: number, src: 'h10' | 'air') => {
+    const idx = Math.floor(t / bucketMs);
+    let a = accs.get(idx);
+    if (!a) { a = { h10Sum: 0, h10N: 0, airSum: 0, airN: 0 }; accs.set(idx, a); }
+    if (src === 'h10') { a.h10Sum += bpm; a.h10N++; } else { a.airSum += bpm; a.airN++; }
+  };
+  for (const s of h10Bpm) put(s.t_ms, s.bpm, 'h10');
+  for (const s of airIn) put(s.t_ms, s.bpm, 'air');
+
+  const buckets: HrBucket[] = [];
+  let usedH10 = false, usedAir = false;
+  for (const [idx, a] of [...accs.entries()].sort((x, y) => x[0] - y[0])) {
+    const tStart = idx * bucketMs;
+    const src = sourceAt(tStart);
+    const sum = src === 'h10' ? a.h10Sum : a.airSum;
+    const n = src === 'h10' ? a.h10N : a.airN;
+    if (n === 0) continue; // fonte escolhida sem amostra neste bucket → buraco
+    buckets.push({ t_ms: tStart, bpm: +(sum / n).toFixed(1), n, source: src });
+    if (src === 'h10') usedH10 = true; else usedAir = true;
+  }
+
+  const source: HrSourceUsed =
+    usedH10 && usedAir ? 'mixed' : usedH10 ? 'h10' : usedAir ? 'air' : 'none';
+
+  return {
+    source,
+    bucket_seconds: bucket,
+    buckets,
+    per_block_source: perBlock.map((b) => ({ apparatus_id: b.apparatus_id, source: b.source })),
+  };
+}

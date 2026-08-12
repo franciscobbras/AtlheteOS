@@ -64,6 +64,30 @@ function IconCheckin({ active }: { active?: boolean }) {
   );
 }
 
+function IconTraining({ active }: { active?: boolean }) {
+  return (
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={active ? 2 : 1.5} strokeLinecap="round" strokeLinejoin="round">
+      <path d="M6.5 6.5l11 11" />
+      <path d="M21 21l-1-1" />
+      <path d="M3 3l1 1" />
+      <path d="M18 22l4-4" />
+      <path d="M2 6l4-4" />
+      <path d="M3 10l7-7" />
+      <path d="M14 21l7-7" />
+    </svg>
+  );
+}
+
+function IconData({ active }: { active?: boolean }) {
+  return (
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={active ? 2 : 1.5} strokeLinecap="round" strokeLinejoin="round">
+      <ellipse cx="12" cy="5" rx="8" ry="3" />
+      <path d="M4 5v6c0 1.66 3.58 3 8 3s8-1.34 8-3V5" />
+      <path d="M4 11v6c0 1.66 3.58 3 8 3s8-1.34 8-3v-6" />
+    </svg>
+  );
+}
+
 function IconBell({ active }: { active?: boolean }) {
   return (
     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={active ? 2 : 1.5} strokeLinecap="round" strokeLinejoin="round">
@@ -92,9 +116,11 @@ function IconMenu() {
 }
 
 const NAV_ITEMS = [
-  { href: '/dashboard', label: 'Dashboard', Icon: IconHome      },
-  { href: '/nutrition', label: 'Nutrition', Icon: IconNutrition },
-  { href: '/life',      label: 'Life',      Icon: IconLife      },
+  { href: '/dashboard',     label: 'Dashboard',     Icon: IconHome      },
+  { href: '/training',      label: 'Training',      Icon: IconTraining  },
+  { href: '/wearable-data', label: 'wearable_data', Icon: IconData      },
+  { href: '/nutrition',     label: 'Nutrition',     Icon: IconNutrition },
+  { href: '/life',          label: 'Life',          Icon: IconLife      },
   { href: '/checkin',   label: 'Check-in',  Icon: IconCheckin   },
   { href: '/student',   label: 'Student',   Icon: IconStudent   },
   { href: '/live',      label: 'Live',      Icon: IconActivity  },

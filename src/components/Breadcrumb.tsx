@@ -5,6 +5,9 @@ import { usePathname } from 'next/navigation';
 
 const LABEL_MAP: Record<string, string> = {
   dashboard: 'Dashboard',
+  training: 'Training',
+  train: 'Treino',
+  'wearable-data': 'wearable_data',
   nutrition: 'Nutrition',
   life: 'Life',
   student: 'Student',

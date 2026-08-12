@@ -8,18 +8,20 @@ import AuthControl from './AuthControl';
 import MorningCheckinGate from './MorningCheckinGate';
 import Link from 'next/link';
 
-const STANDALONE_ROUTES = ['/', '/login', '/auth'];
+const STANDALONE_ROUTES = ['/login', '/auth'];
 
 function isStandalone(path: string): boolean {
   return STANDALONE_ROUTES.includes(path) || path.startsWith('/auth/');
 }
 
 const DRAWER_ITEMS = [
-  { href: '/dashboard', label: 'Dashboard' },
-  { href: '/nutrition', label: 'Nutrition' },
-  { href: '/life',      label: 'Life' },
-  { href: '/student',   label: 'Student' },
-  { href: '/live',      label: 'Live' },
+  { href: '/dashboard',     label: 'Dashboard' },
+  { href: '/training',      label: 'Training' },
+  { href: '/wearable-data', label: 'wearable_data' },
+  { href: '/nutrition',     label: 'Nutrition' },
+  { href: '/life',          label: 'Life' },
+  { href: '/student',       label: 'Student' },
+  { href: '/live',          label: 'Live' },
 ];
 
 export default function AppShell({ children }: { children: ReactNode }) {
