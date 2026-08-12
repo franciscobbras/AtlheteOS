@@ -55,13 +55,8 @@ $$;
 comment on function wearable.hr_series_bucketed(timestamptz, timestamptz, integer) is
   'Série de HR média por bucket de N segundos (alinhado ao epoch absoluto) num intervalo. Agregação no SQL para o gráfico de treino não trazer o cru todo. SÓ LEITURA; RLS aplica-se (security invoker).';
 
--- As funções nascem com EXECUTE para PUBLIC — revogar e conceder só ao que deve.
-revoke execute on function wearable.hr_series_bucketed(timestamptz, timestamptz, integer) from public;
-do $$
-begin
-  if to_regrole('anon') is not null then
-    execute 'revoke execute on function wearable.hr_series_bucketed(timestamptz, timestamptz, integer) from anon';
-  end if;
-end
-$$;
-grant execute on function wearable.hr_series_bucketed(timestamptz, timestamptz, integer) to authenticated, service_role;
+-- As funções nascem com EXECUTE para PUBLIC — o mesmo buraco que já apareceu no
+-- ops.trigger_edge_function. Esta lê a série de HR inteira, por isso revoga-se
+-- explicitamente de public e anon antes de conceder só ao que deve.
+revoke execute on function wearable.hr_series_bucketed(timestamptz, timestamptz, integer) from public, anon;
+grant  execute on function wearable.hr_series_bucketed(timestamptz, timestamptz, integer) to authenticated, service_role;
