@@ -88,10 +88,12 @@ export async function resumeBlock(blockId: string): Promise<void> {
   raise(error);
 }
 
-/** Fecha o segmento (se houver) + grava o RPE. RPE obrigatório (TR030). TR014. */
+/** Fecha o segmento (se houver) + grava o RPE. RPE obrigatório na maioria dos
+ *  aparelhos (TR030 se null); aquecimento/flexibilidade/mobilidade fecham com
+ *  rpe=null (sem escala de esforço). TR014 se o bloco não existir/já fechado. */
 export async function closeBlock(
   blockId: string,
-  rpe: number,
+  rpe: number | null,
   opts?: { feeling?: number | null; notes?: string | null; extra?: Record<string, unknown> | null },
 ): Promise<void> {
   const { error } = await tr().rpc('close_block', {

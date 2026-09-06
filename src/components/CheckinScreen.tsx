@@ -56,6 +56,15 @@ function fmtLatency(minutes: number): string {
   const h = Math.floor(minutes / 60), m = Math.round(minutes % 60);
   return h > 0 ? `${h}h ${String(m).padStart(2, '0')}m` : `${m}m`;
 }
+// Soma dias a um YMD (âncora UTC para não derivar com DST). YMD zero-padded
+// compara-se lexicograficamente, por isso serve para ordenar/limitar intervalos.
+function ymdAddDays(ymd: string, n: number): string {
+  const [y, m, d] = ymd.split('-').map(Number);
+  const dt = new Date(Date.UTC(y, m - 1, d));
+  dt.setUTCDate(dt.getUTCDate() + n);
+  const p = (x: number) => String(x).padStart(2, '0');
+  return `${dt.getUTCFullYear()}-${p(dt.getUTCMonth() + 1)}-${p(dt.getUTCDate())}`;
+}
 
 type SleepRow = { start_utc: string; end_utc: string; utc_offset_seconds: number };
 
@@ -134,6 +143,18 @@ export default function CheckinScreen() {
 
   useEffect(() => { load(); }, [savedTick]);
 
+  // Calendário contínuo do 1.º check-in até hoje: os dias sem registo aparecem
+  // como "check-in em falta". Ancorado no check-in mais antigo (não antes de
+  // existir subjetivo há "em falta") e limitado a 120 dias para não explodir.
+  const byDate = new Map((rows ?? []).map((r) => [r.date, r] as const));
+  const calendar: string[] = [];
+  if (rows && rows.length > 0) {
+    const earliest = rows.reduce((a, r) => (r.date < a ? r.date : a), rows[0].date);
+    const floor = ymdAddDays(today, -120);
+    const start = earliest < floor ? floor : earliest;
+    for (let d = today; d >= start; d = ymdAddDays(d, -1)) calendar.push(d);
+  }
+
   const todayRow = rows?.find((r) => r.date === today) ?? null;
   const initial: Partial<CheckinValues> | null = todayRow
     ? {
@@ -203,11 +224,22 @@ export default function CheckinScreen() {
                 </tr>
               </thead>
               <tbody>
-                {rows.map((r) => {
+                {calendar.map((date) => {
+                  const r = byDate.get(date);
+                  const isToday = date === today;
+                  // Dia sem check-in → linha "em falta" (não fabrica métricas).
+                  if (!r) {
+                    return (
+                      <tr key={date} style={isToday ? { background: 'var(--surface-hover)' } : undefined}>
+                        <td style={{ fontWeight: 600, color: 'var(--muted)' }}>{date}</td>
+                        <td colSpan={7} style={{ color: 'var(--muted)', fontStyle: 'italic' }}>check-in em falta</td>
+                      </tr>
+                    );
+                  }
                   const lat = latencyMin(r);
                   const f = reliability(lat);
                   return (
-                  <tr key={r.date} style={r.date === today ? { background: 'var(--surface-hover)' } : undefined}>
+                  <tr key={r.date} style={isToday ? { background: 'var(--surface-hover)' } : undefined}>
                     <td style={{ fontWeight: 600, color: 'var(--text)' }}>{r.date}</td>
                     <td style={{ textAlign: 'right', fontVariantNumeric: 'tabular-nums' }}>{r.sleep_perceived ?? '—'}</td>
                     <td style={{ textAlign: 'right', fontVariantNumeric: 'tabular-nums' }}>{r.recovery_feeling ?? '—'}</td>

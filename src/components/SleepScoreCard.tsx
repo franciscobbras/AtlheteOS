@@ -16,7 +16,7 @@ import { supabase } from '@/lib/supabaseClient';
 import { useDayData, type DayScore, type DayCheckin } from '@/contexts/DayDataContext';
 
 // 0–100 → cor (mesmos limiares do wellbeing).
-function scoreColor(v: number): string {
+export function scoreColor(v: number): string {
   return v >= 67 ? '#22C55E' : v >= 34 ? '#F59E0B' : '#EF4444';
 }
 // 0–10 subjetivo → cor (maior = melhor).
@@ -32,10 +32,10 @@ function trendColor(d: number): string {
 }
 
 // ── SRI (série) ───────────────────────────────────────────────────────────────
-type SriDriver = { factor: string; impact: number; detail: string };
-type SriCtx = { status: string; dias_validos: number; fracao_valida: number; pares_validos: number; pares_maximos: number; window_days: number };
-type SriRow = { date: string; score: number | null; confidence: number | null; drivers: SriDriver[] | null; context: SriCtx | null };
-type SriPub = SriRow & { score: number };
+export type SriDriver = { factor: string; impact: number; detail: string };
+export type SriCtx = { status: string; dias_validos: number; fracao_valida: number; pares_validos: number; pares_maximos: number; window_days: number };
+export type SriRow = { date: string; score: number | null; confidence: number | null; drivers: SriDriver[] | null; context: SriCtx | null };
+export type SriPub = SriRow & { score: number };
 
 // Anel de progresso 3/4 de volta, igual ao gauge de wellbeing.
 function ArcRing({ value, color, size = 128 }: { value: number; color: string; size?: number }) {
@@ -157,12 +157,12 @@ export default function SleepScoreCard() {
   );
 }
 
-// ── Modal de detalhe ────────────────────────────────────────────────────────
-function ScoreDetail({
+// ── Corpo do detalhe — reutilizado no modal do dashboard E no ecrã do tab Life ──
+export function ScoreDetailBody({
   row, score, conf, color, checkin, sriPub, sriLatest, onClose,
 }: {
   row: DayScore; score: number; conf: number | null; color: string; checkin: DayCheckin | null;
-  sriPub: SriPub[]; sriLatest: SriPub | null; onClose: () => void;
+  sriPub: SriPub[]; sriLatest: SriPub | null; onClose?: () => void;
 }) {
   const d = row.drivers;
   const ctx = row.context;
@@ -180,17 +180,12 @@ function ScoreDetail({
     { label: 'Energia', v: checkin?.mood_energy ?? null },
   ];
 
-  const overlay: React.CSSProperties = {
-    position: 'fixed', inset: 0, zIndex: 1000, background: 'rgba(0,0,0,0.72)',
-    backdropFilter: 'blur(6px)', display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 16,
-  };
   const th: React.CSSProperties = { fontSize: 10, letterSpacing: '0.06em', textTransform: 'uppercase', color: 'var(--muted)', fontWeight: 600, textAlign: 'left', paddingBottom: 6 };
   const numCell: React.CSSProperties = { textAlign: 'right', fontVariantNumeric: 'tabular-nums' };
   const sctx = sriLatest?.context;
 
   return (
-    <div role="dialog" aria-modal="true" style={overlay} onClick={onClose}>
-      <div className="card" style={{ width: '100%', maxWidth: 720, maxHeight: '92dvh', overflowY: 'auto' }} onClick={(e) => e.stopPropagation()}>
+    <>
         {/* Cabeçalho */}
         <div style={{ display: 'flex', alignItems: 'center', gap: 16, marginBottom: 18 }}>
           <div style={{ position: 'relative', width: 88, height: 88, flexShrink: 0 }}>
@@ -209,7 +204,7 @@ function ScoreDetail({
               </p>
             )}
           </div>
-          <button onClick={onClose} aria-label="Fechar" style={{ background: 'none', border: 'none', color: 'var(--muted)', fontSize: 22, cursor: 'pointer', lineHeight: 1, alignSelf: 'flex-start' }}>×</button>
+          {onClose && <button onClick={onClose} aria-label="Fechar" style={{ background: 'none', border: 'none', color: 'var(--muted)', fontSize: 22, cursor: 'pointer', lineHeight: 1, alignSelf: 'flex-start' }}>×</button>}
         </div>
 
         {/* Dois painéis: objetivo | subjetivo */}
@@ -328,13 +323,32 @@ function ScoreDetail({
             )}
           </div>
         )}
-      </div>
 
       <style>{`
         @media (max-width: 620px) {
           .ss-detail-grid { grid-template-columns: 1fr !important; }
         }
       `}</style>
+    </>
+  );
+}
+
+// ── Modal do dashboard: overlay + o corpo reutilizável ──────────────────────
+function ScoreDetail({
+  row, score, conf, color, checkin, sriPub, sriLatest, onClose,
+}: {
+  row: DayScore; score: number; conf: number | null; color: string; checkin: DayCheckin | null;
+  sriPub: SriPub[]; sriLatest: SriPub | null; onClose: () => void;
+}) {
+  const overlay: React.CSSProperties = {
+    position: 'fixed', inset: 0, zIndex: 1000, background: 'rgba(0,0,0,0.72)',
+    backdropFilter: 'blur(6px)', display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 16,
+  };
+  return (
+    <div role="dialog" aria-modal="true" style={overlay} onClick={onClose}>
+      <div className="card" style={{ width: '100%', maxWidth: 720, maxHeight: '92dvh', overflowY: 'auto' }} onClick={(e) => e.stopPropagation()}>
+        <ScoreDetailBody row={row} score={score} conf={conf} color={color} checkin={checkin} sriPub={sriPub} sriLatest={sriLatest} onClose={onClose} />
+      </div>
     </div>
   );
 }

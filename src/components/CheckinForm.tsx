@@ -16,6 +16,7 @@
 
 import { useState } from 'react';
 import { supabase } from '@/lib/supabaseClient';
+import PainMap from './PainMap';
 
 export type CheckinValues = {
   sleep_perceived: number | null;
@@ -146,6 +147,13 @@ export default function CheckinForm({
           onChange={(e) => setV((p) => ({ ...p, notes: e.target.value }))}
           style={{ width: '100%', resize: 'vertical' }}
         />
+      </div>
+
+      {/* Dor (opcional) — boneco inline. Grava as suas próprias linhas em
+          pain_reports com session_id null (check-in matinal), independente do
+          guardar do check-in. Se não tocar em nada, não grava nada. */}
+      <div style={{ marginBottom: 16, border: '1px solid var(--border)', borderRadius: 'var(--radius)', padding: 12 }}>
+        <PainMap sessionId={null} />
       </div>
 
       {err && <p className="message message-error" style={{ fontSize: 13 }}>{err}</p>}

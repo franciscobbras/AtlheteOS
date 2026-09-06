@@ -14,6 +14,7 @@ import { ingest } from "./ingest.ts";
 import { readGoogleSecrets, writeSecret } from "./vault.ts";
 import { ReauthRequiredError } from "./google.ts";
 import { notifyOnce } from "../_shared/notify.ts";
+import { reconcileDataMissing, lisbonToday } from "../_shared/series-status.ts";
 import { computeSleepScores, wakeDay } from "../_shared/sleep-score.ts";
 import { computeSRI } from "../_shared/sri.ts";
 
@@ -115,6 +116,20 @@ Deno.serve(async (req) => {
           dedupeKey: `metric_computation_failure:sri:${wd}`,
         }).catch((e) => console.error(`[ingest-wearable] falha ao gravar notificação: ${e}`));
       }
+    }
+
+    // data_missing por item do pacote diário, com o critério da base. Uma
+    // notificação por item (sono, HRV diário, FC de repouso, temperatura) — nunca
+    // um "sono + agregados" que não diz o que faltou. Emite só na tentativa final;
+    // resolve o que já esteja completo. Os agregados derivados (temp_baseline,
+    // temp_stddev_30d) ficam de fora: não são dados da API, são cálculos.
+    if (!dryRun) {
+      await reconcileDataMissing(client, {
+        day: date,
+        series: ["sleep", "daily_hrv_rmssd", "resting_hr", "temp_nightly"],
+        isFinal,
+        todayLocal: lisbonToday(),
+      });
     }
 
     return json({

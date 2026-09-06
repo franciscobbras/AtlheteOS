@@ -18,6 +18,8 @@ import Link from 'next/link';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { getSession, listApparatus, listBlocks, type SessionRow, type BlockRow, type Apparatus } from '@/lib/training';
 import { getSessionHrSeries, type HrSeries } from '@/lib/hr';
+import SessionPains from './SessionPains';
+import { listPainForSessions, listRegionLabels, type PainReport, type RegionLabelInfo } from '@/lib/pain';
 
 const PALETTE = ['#4F8CFF', '#22C55E', '#F59E0B', '#EF4444', '#A855F7', '#06B6D4', '#EC4899', '#84CC16', '#F97316', '#14B8A6', '#6366F1', '#EAB308', '#F43F5E'];
 
@@ -41,14 +43,21 @@ export default function SessionDetail({ sessionId }: { sessionId: string }) {
   const [session, setSession] = useState<SessionRow | null>(null);
   const [blocks, setBlocks] = useState<BlockView[]>([]);
   const [hr, setHr] = useState<HrSeries | null>(null);
+  const [pains, setPains] = useState<PainReport[]>([]);
+  const [regions, setRegions] = useState<Map<string, RegionLabelInfo>>(new Map());
   const [nowMs] = useState(() => Date.now());
 
   useEffect(() => {
     (async () => {
       try {
-        const [s, apps, bs] = await Promise.all([getSession(sessionId), listApparatus(), listBlocks(sessionId)]);
+        const [s, apps, bs, pr, reg] = await Promise.all([
+          getSession(sessionId), listApparatus(), listBlocks(sessionId),
+          listPainForSessions([sessionId]), listRegionLabels(),
+        ]);
         if (!s) { setError('Sessão não encontrada.'); setLoading(false); return; }
         setSession(s);
+        setPains(pr);
+        setRegions(reg);
 
         const fromMs = Date.parse(s.start_utc);
         const endMs = s.end_utc ? Date.parse(s.end_utc) : nowMs;
@@ -126,6 +135,13 @@ export default function SessionDetail({ sessionId }: { sessionId: string }) {
               {hr.points.length} pontos ({hr.bucket_seconds}s/bucket, de {hr.n_raw} amostras) · agregado no SQL
             </p>
           )}
+        </div>
+      )}
+
+      {/* Dores marcadas no boneco durante este treino */}
+      {session && pains.length > 0 && (
+        <div className="card">
+          <SessionPains pains={pains} regions={regions} />
         </div>
       )}
     </div>

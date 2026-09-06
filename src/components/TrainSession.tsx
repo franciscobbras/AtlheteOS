@@ -25,6 +25,7 @@ import {
   closedSeconds, openSegmentStartMs,
   TrainingError, type Apparatus, type BlockRow,
 } from '@/lib/training';
+import PainMap from './PainMap';
 
 type Phase = 'loading' | 'idle' | 'choose' | 'main';
 
@@ -41,6 +42,11 @@ function fmt(totalSec: number): string {
 // Bloco a fechar via popup de RPE. `thenEnd` = veio do "terminar sessão", por
 // isso a seguir ao RPE abre-se o popup de fim de sessão em vez de ir escolher.
 type PendingClose = { blockId: string; apparatusName: string; thenEnd: boolean };
+
+// Aparelhos sem escala de esforço percebido: fecham sem pedir RPE (rpe=null →
+// não contam para o sRPE). Identificados pelo nome (constantes do seed).
+const NO_RPE = new Set(['aquecimento', 'flexibilidade', 'mobilidade']);
+const isNoRpe = (name: string) => NO_RPE.has(name.trim().toLowerCase());
 
 export default function TrainSession() {
   const [phase, setPhase] = useState<Phase>('loading');
@@ -139,23 +145,45 @@ export default function TrainSession() {
     } catch (e) { fail(e); } finally { setBusy(false); }
   }, [activeBlock, activePaused, sessionId, refreshBlocks, fail]);
 
-  // "próximo bloco": pede o RPE do bloco atual, depois vai escolher aparelho.
+  // Fecha um bloco SEM RPE (aquecimento/flexibilidade/mobilidade). Se o RPC
+  // ainda tiver o guard TR030 (spec de DB por aplicar), cai no popup de sempre —
+  // rollout sem quebrar nada.
+  const closeNoRpe = useCallback(async (blockId: string, apparatusName: string, thenEnd: boolean) => {
+    if (!sessionId) return;
+    setBusy(true); setError(null);
+    try {
+      await closeBlock(blockId, null);
+      await refreshBlocks(sessionId);
+      if (thenEnd) setEndOpen(true); else setPhase('choose');
+    } catch (e) {
+      if (e instanceof TrainingError && e.code === 'TR030') {
+        setPendingClose({ blockId, apparatusName, thenEnd });
+      } else { fail(e); }
+    } finally { setBusy(false); }
+  }, [sessionId, refreshBlocks, fail]);
+
+  // "próximo bloco": aquecimento/flexibilidade/mobilidade fecham direto (sem
+  // RPE); os restantes pedem o RPE do bloco atual e depois vão escolher aparelho.
   const askNextBlock = useCallback(() => {
     if (!activeBlock) return;
-    setPendingClose({ blockId: activeBlock.id, apparatusName: nameOf(activeBlock.apparatus_id), thenEnd: false });
-  }, [activeBlock, nameOf]);
+    const name = nameOf(activeBlock.apparatus_id);
+    if (isNoRpe(name)) { closeNoRpe(activeBlock.id, name, false); return; }
+    setPendingClose({ blockId: activeBlock.id, apparatusName: name, thenEnd: false });
+  }, [activeBlock, nameOf, closeNoRpe]);
 
-  // "terminar sessão": se houver bloco aberto pede o RPE primeiro; senão vai
-  // direto ao popup de fim. Verificação autoritária via get_open_block.
+  // "terminar sessão": se houver bloco aberto fecha-o primeiro (com RPE, ou direto
+  // se for aparelho sem escala); senão vai direto ao popup de fim. Verificação
+  // autoritária via get_open_block.
   const askEnd = useCallback(async () => {
     if (!sessionId) return;
     setBusy(true); setError(null);
     try {
       const open = await getOpenBlock(sessionId);
-      if (open) setPendingClose({ blockId: open.block_id, apparatusName: open.apparatus_name, thenEnd: true });
-      else setEndOpen(true);
+      if (!open) { setEndOpen(true); return; }
+      if (isNoRpe(open.apparatus_name)) { await closeNoRpe(open.block_id, open.apparatus_name, true); return; }
+      setPendingClose({ blockId: open.block_id, apparatusName: open.apparatus_name, thenEnd: true });
     } catch (e) { fail(e); } finally { setBusy(false); }
-  }, [sessionId, fail]);
+  }, [sessionId, closeNoRpe, fail]);
 
   // Submissão do popup de RPE (um toque).
   const submitRpe = useCallback(async (rpe: number) => {
@@ -171,19 +199,18 @@ export default function TrainSession() {
     } catch (e) { fail(e); } finally { setBusy(false); }
   }, [pendingClose, sessionId, refreshBlocks, fail]);
 
-  // Submissão do popup de fim de sessão.
+  // Submissão do popup de fim de sessão. A dor já não vem aqui — regista-se no
+  // boneco (PainMap → subjective.pain_reports com este session_id), a partir do
+  // próprio popup, independente do end_session.
   const submitEnd = useCallback(async (payload: {
-    overallFeeling: number; pain: boolean; painLocation: string; notes: string;
+    overallFeeling: number; notes: string;
   }) => {
     if (!sessionId) return;
     setBusy(true); setError(null);
     try {
-      const extra: Record<string, unknown> = { pain: payload.pain };
-      if (payload.pain && payload.painLocation.trim()) extra.pain_location = payload.painLocation.trim();
       await endSession(sessionId, {
         overallFeeling: payload.overallFeeling,
         notes: payload.notes.trim() || null,
-        extra,
       });
       // Sessão fechada → volta ao estado inicial (pronto para outra).
       setEndOpen(false);
@@ -196,13 +223,14 @@ export default function TrainSession() {
         setEndOpen(false);
         try {
           const open = await getOpenBlock(sessionId);
-          if (open) setPendingClose({ blockId: open.block_id, apparatusName: open.apparatus_name, thenEnd: true });
+          if (open && isNoRpe(open.apparatus_name)) await closeNoRpe(open.block_id, open.apparatus_name, true);
+          else if (open) setPendingClose({ blockId: open.block_id, apparatusName: open.apparatus_name, thenEnd: true });
         } catch (e2) { fail(e2); }
       } else {
         fail(e);
       }
     } finally { setBusy(false); }
-  }, [sessionId, fail]);
+  }, [sessionId, closeNoRpe, fail]);
 
   // ── Durações por bloco (para a lista) ──────────────────────────────────────
   const blockRows = useMemo(() => {
@@ -286,7 +314,7 @@ export default function TrainSession() {
       )}
 
       {endOpen && (
-        <EndSessionPopup busy={busy} onSubmit={submitEnd} onCancel={() => setEndOpen(false)} />
+        <EndSessionPopup sessionId={sessionId} busy={busy} onSubmit={submitEnd} onCancel={() => setEndOpen(false)} />
       )}
     </div>
   );
@@ -439,15 +467,14 @@ function RpePopup({
 
 /* ── Popup: fim de sessão ────────────────────────────────────────────────── */
 function EndSessionPopup({
-  busy, onSubmit, onCancel,
+  sessionId, busy, onSubmit, onCancel,
 }: {
+  sessionId: string | null;
   busy: boolean;
-  onSubmit: (p: { overallFeeling: number; pain: boolean; painLocation: string; notes: string }) => void;
+  onSubmit: (p: { overallFeeling: number; notes: string }) => void;
   onCancel: () => void;
 }) {
   const [feeling, setFeeling] = useState<number | null>(null);
-  const [pain, setPain] = useState<boolean>(false);
-  const [painLocation, setPainLocation] = useState('');
   const [notes, setNotes] = useState('');
 
   const canSubmit = feeling !== null && !busy;
@@ -478,32 +505,8 @@ function EndSessionPopup({
           </div>
         </div>
 
-        <div style={{ display: 'grid', gap: 8 }}>
-          <span style={{ fontSize: 13, color: 'var(--text-secondary)' }}>Dor?</span>
-          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8 }}>
-            <button
-              className="btn"
-              style={{ height: 42, background: !pain ? 'var(--accent)' : 'var(--surface-hover)', color: !pain ? '#fff' : 'var(--text-secondary)', border: '1px solid var(--border)' }}
-              onClick={() => { setPain(false); setPainLocation(''); }}
-            >
-              Não
-            </button>
-            <button
-              className="btn"
-              style={{ height: 42, background: pain ? 'var(--accent)' : 'var(--surface-hover)', color: pain ? '#fff' : 'var(--text-secondary)', border: '1px solid var(--border)' }}
-              onClick={() => setPain(true)}
-            >
-              Sim
-            </button>
-          </div>
-          {pain && (
-            <input
-              className="input"
-              placeholder="Onde?"
-              value={painLocation}
-              onChange={(e) => setPainLocation(e.target.value)}
-            />
-          )}
+        <div style={{ display: 'grid', gap: 8, border: '1px solid var(--border)', borderRadius: 'var(--radius)', padding: 12 }}>
+          <PainMap sessionId={sessionId} />
         </div>
 
         <div style={{ display: 'grid', gap: 8 }}>
@@ -522,7 +525,7 @@ function EndSessionPopup({
           <button
             className="btn btn-primary btn-lg"
             disabled={!canSubmit}
-            onClick={() => feeling !== null && onSubmit({ overallFeeling: feeling, pain, painLocation, notes })}
+            onClick={() => feeling !== null && onSubmit({ overallFeeling: feeling, notes })}
           >
             Terminar sessão
           </button>

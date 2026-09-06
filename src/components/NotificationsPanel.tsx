@@ -41,10 +41,14 @@ export default function NotificationsPanel() {
   async function load() {
     setLoading(true);
     try {
+      // Esconde as resolvidas com mais de 30 dias (não se apagam da base — só
+      // saem da lista). As por resolver mostram-se sempre, seja qual for a idade.
+      const cutoff = new Date(Date.now() - 30 * 24 * 3600 * 1000).toISOString();
       const { data, error } = await supabase
         .schema('ops')
         .from('notifications')
         .select('id, created_at_utc, type, severity, title, detail, resolved, resolved_at_utc')
+        .or(`resolved.eq.false,created_at_utc.gte.${cutoff}`)
         .order('created_at_utc', { ascending: false });
       if (error) throw error;
       setRows((data as Notification[]) ?? []);
@@ -58,16 +62,18 @@ export default function NotificationsPanel() {
 
   useEffect(() => { load(); }, []);
 
-  async function markResolved(id: string) {
+  async function setResolved(id: string, resolved: boolean) {
     setResolving(id);
+    const resolved_at_utc = resolved ? new Date().toISOString() : null;
     try {
       const { error } = await supabase
         .schema('ops')
         .from('notifications')
-        .update({ resolved: true, resolved_at_utc: new Date().toISOString() })
+        .update({ resolved, resolved_at_utc })
         .eq('id', id);
       if (error) throw error;
-      await load();
+      // Atualiza só esta linha (sem re-fetch → sem flicker nem salto para o topo).
+      setRows((prev) => prev?.map((n) => (n.id === id ? { ...n, resolved, resolved_at_utc } : n)) ?? prev);
     } catch (e) {
       setErr(errText(e));
     } finally {
@@ -105,13 +111,21 @@ export default function NotificationsPanel() {
                     <div style={{ fontSize: 12.5, marginTop: 6, whiteSpace: 'pre-wrap' }}>{n.detail}</div>
                   )}
                 </div>
-                {!n.resolved && (
+                {!n.resolved ? (
                   <button
                     className="btn btn-secondary btn-sm"
                     disabled={resolving === n.id}
-                    onClick={() => markResolved(n.id)}
+                    onClick={() => setResolved(n.id, true)}
                   >
                     {resolving === n.id ? 'A marcar…' : 'Marcar resolvido'}
+                  </button>
+                ) : (
+                  <button
+                    className="btn btn-ghost btn-sm"
+                    disabled={resolving === n.id}
+                    onClick={() => setResolved(n.id, false)}
+                  >
+                    {resolving === n.id ? 'A reabrir…' : 'Reabrir'}
                   </button>
                 )}
               </div>

@@ -15,10 +15,12 @@
 import Link from 'next/link';
 import { useEffect, useMemo, useState } from 'react';
 import TrainingEntry from './TrainingEntry';
+import SessionPains from './SessionPains';
 import {
   listApparatus, listSessions, listBlocksForSessions,
   type Apparatus, type SessionRow, type BlockWithSession, type Segment,
 } from '@/lib/training';
+import { listPainForSessions, listRegionLabels, type PainReport, type RegionLabelInfo } from '@/lib/pain';
 
 // Data/hora no fuso em que o treino foi feito (usa o offset guardado, não o do
 // viewer): desloca-se o instante e leem-se os campos em UTC para não re-aplicar.
@@ -56,6 +58,8 @@ export default function TrainingSessions() {
   const [sessions, setSessions] = useState<SessionRow[]>([]);
   const [blocks, setBlocks] = useState<BlockWithSession[]>([]);
   const [apparatus, setApparatus] = useState<Apparatus[]>([]);
+  const [pains, setPains] = useState<PainReport[]>([]);
+  const [regions, setRegions] = useState<Map<string, RegionLabelInfo>>(new Map());
   const [nowMs] = useState(() => Date.now());
 
   useEffect(() => {
@@ -64,8 +68,15 @@ export default function TrainingSessions() {
         const [apps, sess] = await Promise.all([listApparatus(), listSessions()]);
         setApparatus(apps);
         setSessions(sess);
-        const blk = await listBlocksForSessions(sess.map((s) => s.id));
+        const ids = sess.map((s) => s.id);
+        const [blk, pr, reg] = await Promise.all([
+          listBlocksForSessions(ids),
+          listPainForSessions(ids),
+          listRegionLabels(),
+        ]);
         setBlocks(blk);
+        setPains(pr);
+        setRegions(reg);
       } catch (e) {
         setError(e instanceof Error ? e.message : 'Erro ao carregar sessões.');
       } finally {
@@ -88,6 +99,17 @@ export default function TrainingSessions() {
     }
     return m;
   }, [blocks]);
+
+  const painsBySession = useMemo(() => {
+    const m = new Map<string, PainReport[]>();
+    for (const p of pains) {
+      if (!p.session_id) continue;
+      const arr = m.get(p.session_id) ?? [];
+      arr.push(p);
+      m.set(p.session_id, arr);
+    }
+    return m;
+  }, [pains]);
 
   return (
     <div className="animate-fade-in" style={{ display: 'grid', gap: 16 }}>
@@ -114,6 +136,8 @@ export default function TrainingSessions() {
               key={s.id}
               session={s}
               blocks={blocksBySession.get(s.id) ?? []}
+              pains={painsBySession.get(s.id) ?? []}
+              regions={regions}
               nameOf={nameOf}
               nowMs={nowMs}
             />
@@ -125,10 +149,12 @@ export default function TrainingSessions() {
 }
 
 function SessionCard({
-  session, blocks, nameOf, nowMs,
+  session, blocks, pains, regions, nameOf, nowMs,
 }: {
   session: SessionRow;
   blocks: BlockWithSession[];
+  pains: PainReport[];
+  regions: Map<string, RegionLabelInfo>;
   nameOf: (id: string) => string;
   nowMs: number;
 }) {
@@ -182,12 +208,16 @@ function SessionCard({
         <Chip label="Ativo" value={fmtDur(activeSec)} />
         {load > 0 && <Chip label="Carga (sRPE)" value={String(Math.round(load))} />}
         {session.overall_feeling != null && <Chip label="Sensação" value={`${session.overall_feeling}/10`} />}
-        {pain && <Chip label="Dor" value={painLoc || 'sim'} tone="warn" />}
+        {/* Chip legado (flag em extra) só quando não há dores detalhadas do boneco. */}
+        {pain && pains.length === 0 && <Chip label="Dor" value={painLoc || 'sim'} tone="warn" />}
       </div>
 
       {session.notes && (
         <p style={{ margin: 0, fontSize: 13, color: 'var(--text-secondary)', whiteSpace: 'pre-wrap' }}>{session.notes}</p>
       )}
+
+      {/* Dores marcadas no boneco durante este treino */}
+      <SessionPains pains={pains} regions={regions} compact divided />
     </Link>
   );
 }

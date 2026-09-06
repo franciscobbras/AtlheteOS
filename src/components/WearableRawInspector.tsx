@@ -21,7 +21,7 @@ import { supabase } from '@/lib/supabaseClient';
 
 type DailyRow = { date: string; metric_type: string; value: number; unit: string | null; source: string };
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
-type SleepRow = { start_utc: string; end_utc: string; utc_offset_seconds: number; summary: any; stages: any; source: string };
+export type SleepRow = { start_utc: string; end_utc: string; utc_offset_seconds: number; summary: any; stages: any; source: string };
 type ScoreRow = { date: string; score: number | null; confidence: number | null };
 type DayIndexRow = { day: string; hr: number; hrv: number; spo2: number };
 type IntradayPoint = { timestamp_utc: string; utc_offset_seconds: number; value: number };
@@ -48,10 +48,10 @@ function todayYMD(): string {
 function shifted(utcIso: string, offsetSeconds: number): Date {
   return new Date(new Date(utcIso).getTime() + offsetSeconds * 1000);
 }
-function localDate(utcIso: string, offsetSeconds: number): string {
+export function localDate(utcIso: string, offsetSeconds: number): string {
   return toYMD(shifted(utcIso, offsetSeconds));
 }
-function localHHMM(utcIso: string, offsetSeconds: number): string {
+export function localHHMM(utcIso: string, offsetSeconds: number): string {
   const d = shifted(utcIso, offsetSeconds);
   return `${String(d.getUTCHours()).padStart(2, '0')}:${String(d.getUTCMinutes()).padStart(2, '0')}`;
 }
@@ -59,10 +59,10 @@ function localHHMMSS(utcIso: string, offsetSeconds: number): string {
   const d = shifted(utcIso, offsetSeconds);
   return `${String(d.getUTCHours()).padStart(2, '0')}:${String(d.getUTCMinutes()).padStart(2, '0')}:${String(d.getUTCSeconds()).padStart(2, '0')}`;
 }
-function durationMin(startIso: string, endIso: string): number {
+export function durationMin(startIso: string, endIso: string): number {
   return Math.round((new Date(endIso).getTime() - new Date(startIso).getTime()) / 60000);
 }
-function fmtHhMm(min: number): string {
+export function fmtHhMm(min: number): string {
   return `${Math.floor(min / 60)}h ${String(min % 60).padStart(2, '0')}m`;
 }
 
@@ -77,7 +77,7 @@ function stageMinutes(summary: any, type: string): number | null {
   return Number.isFinite(n) ? n : null;
 }
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
-function efficiencyPct(summary: any): number | null {
+export function efficiencyPct(summary: any): number | null {
   if (summary?.efficiency != null && Number.isFinite(Number(summary.efficiency))) return Number(summary.efficiency);
   if (summary?.sleepEfficiency != null && Number.isFinite(Number(summary.sleepEfficiency))) return Number(summary.sleepEfficiency);
   const asleep = Number(summary?.minutesAsleep);
@@ -392,7 +392,7 @@ const STAGE_COLOR: Record<string, string> = { AWAKE: '#F59E0B', REM: '#8B5CF6', 
 const STAGE_ORDER = ['AWAKE', 'REM', 'LIGHT', 'DEEP'];
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
-function Hypnogram({ stages, offsetSeconds }: { stages: any; offsetSeconds: number }) {
+export function Hypnogram({ stages, offsetSeconds }: { stages: any; offsetSeconds: number }) {
   // Raw stage segments → sorted {type, start, end} in UTC ms. Positions use UTC
   // ms deltas (offset-agnostic); axis labels are shifted to local for reading.
   const segs = (Array.isArray(stages) ? stages : [])

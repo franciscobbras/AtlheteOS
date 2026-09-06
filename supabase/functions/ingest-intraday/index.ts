@@ -12,7 +12,8 @@ import { createClient } from "npm:@supabase/supabase-js@2";
 import { ingest } from "./ingest.ts";
 import { readGoogleSecrets, writeSecret } from "./vault.ts";
 import { ReauthRequiredError, SERIES, type SeriesKey } from "./google.ts";
-import { notifyOnce, resolveByDedupe } from "../_shared/notify.ts";
+import { notifyOnce } from "../_shared/notify.ts";
+import { reconcileDataMissing, lisbonToday } from "../_shared/series-status.ts";
 
 // "Am I the last scheduled attempt?" is the CRON's knowledge, not the function's.
 // The cron marks its final tick with ?final=1 (see the *_cron_*.sql migrations);
@@ -120,28 +121,11 @@ Deno.serve(async (req) => {
     }
 
     if (!dryRun) {
+      // Completude decidida pela base (series_status), não por "≥1 ponto".
+      // Uma por item (hrv/spo2), emite só na tentativa final, resolve quando enche.
       const dayStr = dateParam ?? new Date(rangeStartMs).toISOString().slice(0, 10);
-      for (const r of results) {
-        if (r.kind !== "sleep") continue;
-        const hasData = (r.stored_after ?? r.rows_written) > 0;
-        if (hasData) {
-          // Data present (this run wrote it, or a reconcile pass found it late):
-          // close any open data_missing for this series+day. Runs on every tick,
-          // not just final, so the loop closes as soon as the data arrives.
-          await resolveByDedupe(client, "data_missing", `data_missing:${r.series}:${dayStr}`)
-            .catch((e) => console.error(`[ingest-intraday] falha ao resolver notificação: ${e}`));
-        } else if (isFinal) {
-          // Still empty at the schedule's final tick (?final=1) → escalate once.
-          await notifyOnce(client, {
-            type: "data_missing",
-            severity: "warning",
-            title: `Dados de ${r.series} em falta para ${dayStr}`,
-            detail: r.note ?? `sem pontos ${r.series} até ao último tick agendado`,
-            context: { series: r.series, day: dayStr },
-            dedupeKey: `data_missing:${r.series}:${dayStr}`,
-          }).catch((e) => console.error(`[ingest-intraday] falha ao gravar notificação: ${e}`));
-        }
-      }
+      const items = results.filter((r) => r.kind === "sleep").map((r) => r.series);
+      await reconcileDataMissing(client, { day: dayStr, series: items, isFinal, todayLocal: lisbonToday() });
     }
 
     return json({
