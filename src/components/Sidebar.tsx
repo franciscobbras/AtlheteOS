@@ -28,6 +28,16 @@ function IconNutrition({ active }: { active?: boolean }) {
   );
 }
 
+function IconWeight({ active }: { active?: boolean }) {
+  return (
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={active ? 2 : 1.5} strokeLinecap="round" strokeLinejoin="round">
+      <rect x="3" y="4" width="18" height="16" rx="3" />
+      <path d="M12 15L15 9" />
+      <circle cx="12" cy="15" r="1" />
+    </svg>
+  );
+}
+
 function IconLife({ active }: { active?: boolean }) {
   return (
     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={active ? 2 : 1.5} strokeLinecap="round" strokeLinejoin="round">
@@ -120,6 +130,7 @@ const NAV_ITEMS = [
   { href: '/training',      label: 'Training',      Icon: IconTraining  },
   { href: '/wearable-data', label: 'wearable_data', Icon: IconData      },
   { href: '/nutrition',     label: 'Nutrition',     Icon: IconNutrition },
+  { href: '/weight',        label: 'Weight',        Icon: IconWeight    },
   { href: '/life',          label: 'Life',          Icon: IconLife      },
   { href: '/checkin',   label: 'Check-in',  Icon: IconCheckin   },
   { href: '/student',   label: 'Student',   Icon: IconStudent   },

@@ -11,7 +11,7 @@ import { useEffect, useState } from 'react';
 import { supabase } from '@/lib/supabaseClient';
 import CheckinForm, { CheckinValues, localTodayYMD } from './CheckinForm';
 import WeightPopup from './WeightPopup';
-import WeightTrendCard from './WeightTrendCard';
+import { getTodayWeight } from '@/lib/weight';
 
 type Row = {
   date: string;
@@ -78,12 +78,15 @@ export default function CheckinScreen() {
   const [rel, setRel] = useState<{ grace: number; halfLife: number; floor: number } | null>(null);
   const [err, setErr] = useState<string | null>(null);
   const [savedTick, setSavedTick] = useState(0);
-  // Peso: pop-up separado que abre DEPOIS de submeter o check-in; refreshKey
-  // recarrega o cartão da trend quando se guarda um peso.
+  // Peso: pop-up separado. Abre automaticamente após submeter o check-in, mas
+  // também há um acesso persistente (ver/editar) — o gráfico da trend vive em /weight.
   const [weightPromptOpen, setWeightPromptOpen] = useState(false);
-  const [weightRefresh, setWeightRefresh] = useState(0);
+  const [todayWeight, setTodayWeight] = useState<number | null>(null);
 
   const today = localTodayYMD();
+
+  const loadWeight = () => { getTodayWeight().then(setTodayWeight).catch(() => setTodayWeight(null)); };
+  useEffect(() => { loadWeight(); }, []);
 
   async function load() {
     try {
@@ -178,7 +181,9 @@ export default function CheckinScreen() {
         <p className="page-subtitle">Como te sentes hoje — a camada subjetiva, respondida antes dos números.</p>
       </div>
 
-      <div className="card" style={{ maxWidth: 520 }}>
+      {/* Check-in + peso lado a lado (não desperdiçar espaço vertical). */}
+      <div style={{ display: 'flex', gap: 16, flexWrap: 'wrap', alignItems: 'flex-start' }}>
+      <div className="card" style={{ flex: '1 1 360px', maxWidth: 520 }}>
         <p className="section-label" style={{ marginTop: 0 }}>
           {todayRow ? `Hoje (${today}) — editar` : `Hoje (${today})`}
         </p>
@@ -210,7 +215,19 @@ export default function CheckinScreen() {
         )}
       </div>
 
-      <WeightTrendCard refreshKey={weightRefresh} />
+      {/* Peso — acesso persistente, ao lado do check-in (gráfico em /weight) */}
+      <div className="card" style={{ flex: '0 1 220px', display: 'grid', gap: 10, alignContent: 'start' }}>
+        <p className="section-label" style={{ margin: 0 }}>Peso de hoje</p>
+        <p style={{ margin: 0, fontSize: 13, color: 'var(--muted)' }}>
+          {todayWeight != null
+            ? <><strong style={{ fontSize: 22, color: 'var(--text)', fontVariantNumeric: 'tabular-nums' }}>{todayWeight.toFixed(1)}</strong> kg</>
+            : 'ainda não registaste hoje'}
+        </p>
+        <button className="btn btn-secondary btn-sm" onClick={() => setWeightPromptOpen(true)} style={{ justifySelf: 'start' }}>
+          {todayWeight != null ? 'Editar' : 'Registar'}
+        </button>
+      </div>
+      </div>
 
       <div className="card">
         <p className="section-label" style={{ marginTop: 0 }}>Histórico</p>
@@ -266,10 +283,7 @@ export default function CheckinScreen() {
       </div>
 
       {weightPromptOpen && (
-        <WeightPopup
-          onClose={() => setWeightPromptOpen(false)}
-          onSaved={() => setWeightRefresh((k) => k + 1)}
-        />
+        <WeightPopup onClose={() => setWeightPromptOpen(false)} onSaved={loadWeight} />
       )}
     </div>
   );

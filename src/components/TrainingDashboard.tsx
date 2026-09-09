@@ -8,6 +8,7 @@
 
 import SleepScoreCard from './SleepScoreCard';
 import DivergenceCard from './DivergenceCard';
+import WeightMiniCard from './WeightMiniCard';
 import TrainingEntry from './TrainingEntry';
 
 export default function TrainingDashboard() {
@@ -17,10 +18,11 @@ export default function TrainingDashboard() {
         <h1 className="page-title">Dashboard</h1>
       </div>
 
-      {/* Sleep Score + Divergência lado a lado (quebram em ecrã estreito). */}
+      {/* Sleep Score + Divergência + Peso lado a lado (quebram em ecrã estreito). */}
       <div style={{ display: 'flex', gap: 16, flexWrap: 'wrap', alignItems: 'flex-start' }}>
         <SleepScoreCard />
         <DivergenceCard />
+        <WeightMiniCard />
       </div>
       <TrainingEntry />
     </div>
