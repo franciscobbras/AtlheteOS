@@ -107,6 +107,28 @@ export async function listRegionLabels(): Promise<Map<string, RegionLabelInfo>> 
   return m;
 }
 
+/** Edita uma dor já registada (intensidade / lado / nota). authenticated tem
+ *  UPDATE + RLS `for all` → escrita direta. */
+export async function updatePainReport(
+  id: string,
+  patch: { intensity?: number; side?: Side; description?: string | null },
+): Promise<void> {
+  const row: Record<string, unknown> = {};
+  if (patch.intensity != null) row.intensity = patch.intensity;
+  if (patch.side) row.side = patch.side;
+  if ('description' in patch) row.description = patch.description && patch.description.trim() ? patch.description.trim() : null;
+  if (!Object.keys(row).length) return;
+  const { error } = await supabase.schema('subjective').from('pain_reports').update(row).eq('id', id);
+  if (error) throw error;
+}
+
+/** Apaga uma dor. Precisa de DELETE concedido a authenticated (por defeito NÃO
+ *  está — só select/insert/update). Sem o grant, o erro traz code 42501. */
+export async function deletePainReport(id: string): Promise<void> {
+  const { error } = await supabase.schema('subjective').from('pain_reports').delete().eq('id', id);
+  if (error) throw error;
+}
+
 /** Rótulo de uma zona: filho → "Pai aspeto" (ex.: "Bíceps proximal"); pai → o nome.
  *  Alguns nomes de filho já trazem o do pai ("Bíceps proximal", "Tornozelo
  *  anterior") — nesse caso usa-se o nome do filho tal e qual, para não sair

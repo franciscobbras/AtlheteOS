@@ -196,7 +196,7 @@ export async function getSession(id: string): Promise<SessionRow | null> {
   return (data as SessionRow) ?? null;
 }
 
-export type Segment = { start_utc: string; end_utc: string | null };
+export type Segment = { id?: string; start_utc: string; end_utc: string | null };
 export type BlockRow = {
   id: string;
   apparatus_id: string;
@@ -212,7 +212,7 @@ export async function listBlocksForSessions(sessionIds: string[]): Promise<Block
   if (!sessionIds.length) return [];
   const { data, error } = await tr()
     .from('training_blocks')
-    .select('id, session_id, apparatus_id, status, rpe, created_at_utc, block_segments(start_utc, end_utc)')
+    .select('id, session_id, apparatus_id, status, rpe, created_at_utc, block_segments(id, start_utc, end_utc)')
     .in('session_id', sessionIds)
     .order('created_at_utc', { ascending: true });
   raise(error);
@@ -227,7 +227,7 @@ export async function listBlocksForSessions(sessionIds: string[]): Promise<Block
 export async function listBlocks(sessionId: string): Promise<BlockRow[]> {
   const { data, error } = await tr()
     .from('training_blocks')
-    .select('id, apparatus_id, status, rpe, created_at_utc, block_segments(start_utc, end_utc)')
+    .select('id, apparatus_id, status, rpe, created_at_utc, block_segments(id, start_utc, end_utc)')
     .eq('session_id', sessionId)
     .order('created_at_utc', { ascending: true });
   raise(error);
@@ -249,4 +249,64 @@ export function closedSeconds(segs: Segment[]): number {
 export function openSegmentStartMs(segs: Segment[]): number | null {
   const open = segs.find((s) => !s.end_utc);
   return open ? Date.parse(open.start_utc) : null;
+}
+
+// ── Edição de blocos (correção posterior, no detalhe da sessão) ───────────────
+//
+// Estas escrevem DIRETO nas tabelas (authenticated tem UPDATE; RLS `for all`),
+// ao contrário do registo ao vivo que passa pelas RPCs atómicas. É correção de
+// dados a frio, não um fluxo concorrente — não precisa da atomicidade das RPCs.
+// O DELETE precisa de um grant extra (ver deleteBlock).
+
+/** Altera RPE e/ou aparelho de um bloco. rpe=null limpa (aparelhos sem escala). */
+export async function updateBlockMeta(
+  blockId: string,
+  patch: { rpe?: number | null; apparatusId?: string },
+): Promise<void> {
+  const row: Record<string, unknown> = {};
+  if ('rpe' in patch) row.rpe = patch.rpe;
+  if (patch.apparatusId) row.apparatus_id = patch.apparatusId;
+  if (!Object.keys(row).length) return;
+  const { error } = await tr().from('training_blocks').update(row).eq('id', blockId);
+  raise(error);
+}
+
+/** Adiciona um bloco JÁ FECHADO à sessão (correção posterior: bloco esquecido).
+ *  Cria training_blocks (status='closed') + um block_segments com o intervalo. */
+export async function addBlock(
+  sessionId: string,
+  opts: { apparatusId: string; rpe: number | null; startIso: string; endIso: string },
+): Promise<void> {
+  const ins = await tr()
+    .from('training_blocks')
+    .insert({ session_id: sessionId, apparatus_id: opts.apparatusId, status: 'closed', rpe: opts.rpe })
+    .select('id')
+    .single();
+  raise(ins.error);
+  const blockId = (ins.data as { id: string }).id;
+  const seg = await tr().from('block_segments').insert({ block_id: blockId, start_utc: opts.startIso, end_utc: opts.endIso });
+  raise(seg.error);
+}
+
+/** Ajusta os tempos de um segmento (início e/ou fim). ISO UTC. */
+export async function updateSegmentTime(
+  segmentId: string,
+  patch: { start_utc?: string; end_utc?: string },
+): Promise<void> {
+  if (!Object.keys(patch).length) return;
+  const { error } = await tr().from('block_segments').update(patch).eq('id', segmentId);
+  raise(error);
+}
+
+/**
+ * Apaga um bloco e os seus segmentos. Precisa de DELETE concedido a
+ * authenticated (por defeito NÃO está — só select/insert/update). Sem o grant,
+ * o PostgREST devolve 42501 (permission denied) → TrainingError com esse código,
+ * para a UI pedir para aplicar o grant.
+ */
+export async function deleteBlock(blockId: string): Promise<void> {
+  const segs = await tr().from('block_segments').delete().eq('block_id', blockId);
+  raise(segs.error);
+  const blk = await tr().from('training_blocks').delete().eq('id', blockId);
+  raise(blk.error);
 }

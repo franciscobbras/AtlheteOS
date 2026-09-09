@@ -640,6 +640,202 @@ export function getSRI(blocks: RawSleepBlock[], cfg: SRIConfig, targetDate: stri
 
 
 // ═══════════════════════════════════════════════════════════════════════════
+// getDivergence — divergência entre uma série OBJETIVA e uma SUBJETIVA.
+//
+// Pura, determinística, sem IO nem relógio — mesma disciplina do getSleepScore e
+// do getSRI. Genérica: serve sleep_score↔sleep_perceived e (quando existir)
+// readiness↔recovery_feeling. O chamador alinha as duas séries por data e passa
+// tudo; esta função só calcula. Compara DESVIOS (z-scores), nunca valores
+// absolutos — as escalas 0-10 e 0-100 são incomparáveis.
+//
+// Três passos:
+//   1) z de hoje, com baseline = janela_dias dias ANTERIORES (EXCLUI o dia
+//      avaliado; incluí-lo puxa a média para si e infla o SD, atenuando o z nos
+//      dias extremos que são os únicos que interessam).
+//        z_sub = (sub − μ_sub) / max(sd_sub, sd_minimo_subjetivo)
+//        z_obj = (obj − μ_obj) / max(sd_obj, sd_minimo_objetivo)
+//   2) d = z_sub − z_obj (hoje e para cada dia da janela, cada um com o SEU
+//      próprio baseline de janela_dias dias anteriores).
+//   3) divergência = d_hoje / max(sd(d_i), sd_minimo_diferenca).
+//      z_sub e z_obj estão correlacionados; a variância da diferença é 2(1−ρ), o
+//      SD anda ~1.10–1.41 conforme a fase. sd_diff estima sqrt(2(1−ρ))
+//      empiricamente e fixa o limiar num percentil estável.
+//
+// SINAL preservado: + sente-se melhor do que os dados dizem; − pior. O limiar
+// aplica-se a |divergência|; o valor guardado mantém o sinal.
+//
+// Dois gates: (a) >= dias_minimos dias VÁLIDOS no baseline do dia avaliado;
+// (b) >= min_dias_diferenca valores de d_i na janela. Falhar qualquer um →
+// score null + status 'insufficient_data'. Um dia é válido se tiver AMBOS
+// (subjetivo E objetivo não-null) — sleep_score null (insufficient_data) NÃO
+// entra no baseline.
+// ═══════════════════════════════════════════════════════════════════════════
+
+export interface DivergenceDay {
+  date: string;             // YYYY-MM-DD
+  obj: number | null;       // série objetiva (ex.: sleep_score 0-100); null = inválido
+  sub: number | null;       // série subjetiva (ex.: sleep_perceived 0-10); null = sem check-in
+  sub_reliability?: number | null; // fiabilidade do check-in [0-1]; < fiabilidade_minima → sub ignorado
+}
+
+export interface DivergenceConfig {
+  janela_dias: number;         // 14 — baseline dos z E janela dos d_i
+  dias_minimos: number;        // 10 — mínimo de dias válidos no baseline do dia AVALIADO
+  dias_minimos_di: number;     // 5 — mínimo de dias válidos no baseline de cada d_i do sd_diff
+  min_dias_diferenca: number;  // 10 — mínimo de d_i para estimar sd_diff
+  sd_minimo_subjetivo: number; // 0.5 — piso do SD subjetivo
+  sd_minimo_objetivo: number;  // 3.0 — piso do SD objetivo
+  sd_minimo_diferenca: number; // 0.8 — piso do sd_diff
+  limiar_divergencia: number;  // 1.5 — |divergência| a partir da qual dispara (guardado no context p/ a UI)
+  fiabilidade_minima: number;  // 0.40 — check-in abaixo desta fiabilidade não conta (nem baseline nem dia avaliado)
+}
+
+export interface DivergenceContext {
+  status: 'ok' | 'insufficient_data';
+  z_sub: number | null;
+  z_obj: number | null;
+  mu_sub: number | null;
+  sd_sub: number | null;      // SD efetivo (após o piso) que dividiu o z
+  mu_obj: number | null;
+  sd_obj: number | null;
+  d_bruto: number | null;     // z_sub − z_obj de hoje, ANTES de normalizar (crónica não se auto-cala)
+  sd_diff: number | null;     // estimativa empírica de sqrt(2(1−ρ)) (SD dos d_i), antes do piso
+  n_dias_baseline: number;    // dias válidos no baseline do dia avaliado
+  n_dias_diferenca: number;   // nº de d_i válidos na janela
+  janela_dias: number;
+  limiar: number;
+}
+
+export interface DivergenceResult {
+  score: number | null;       // divergência COM SINAL, ou null se insufficient_data
+  drivers: [];
+  vs_baseline: null;
+  confidence: number;
+  context: DivergenceContext;
+}
+
+function dMean(xs: number[]): number { return xs.reduce((a, b) => a + b, 0) / xs.length; }
+function dSampleSD(xs: number[]): number {
+  if (xs.length < 2) return 0;
+  const m = dMean(xs);
+  return Math.sqrt(xs.reduce((a, b) => a + (b - m) * (b - m), 0) / (xs.length - 1));
+}
+
+/**
+ * Divergência para `targetDate`. `days` deve cobrir pelo menos [target − 2·janela + 1 ..
+ * target] (cada d_i da janela precisa do seu baseline de janela_dias dias anteriores).
+ * Puro: nada de IO nem relógio.
+ */
+export function getDivergence(days: DivergenceDay[], cfg: DivergenceConfig, targetDate: string): DivergenceResult {
+  const N = cfg.janela_dias;
+  // GATE de fiabilidade: um check-in abaixo de fiabilidade_minima é ignorado (sub
+  // → null) ANTES de tudo — não entra no baseline nem serve de dia avaliado. Um
+  // sleep_perceived recordado 15h depois de acordar está contaminado; deixá-lo
+  // pesar como um recente enviesa μ_sub/sd_sub. Sem fiabilidade (null) NÃO se
+  // corta (fail-open): não deitar fora o dia quando não se consegue avaliar.
+  const byDate = new Map<string, { obj: number | null; sub: number | null }>();
+  for (const d of days) {
+    const relOk = d.sub_reliability == null || d.sub_reliability >= cfg.fiabilidade_minima;
+    byDate.set(d.date, { obj: d.obj, sub: relOk ? d.sub : null });
+  }
+
+  // Componentes de um dia (z_sub − z_obj), calculados quando o dia tem AMBOS os
+  // valores e um baseline (janela_dias dias ANTERIORES) com pelo menos 1 dia.
+  // O gate de dias_minimos NÃO é aplicado aqui — é o chamador que decide o piso,
+  // porque o dia AVALIADO exige mais (dias_minimos) do que cada d_i do sd_diff.
+  type DayStat = { d: number; zSub: number; zObj: number; muSub: number; sdSub: number; muObj: number; sdObj: number; nB: number };
+  function rawStat(date: string): DayStat | null {
+    const cur = byDate.get(date);
+    if (!cur || cur.obj == null || cur.sub == null) return null;
+    const objB: number[] = [], subB: number[] = [];
+    for (let k = 1; k <= N; k++) {
+      const b = byDate.get(addDaysYMD(date, -k));
+      if (b && b.obj != null && b.sub != null) { objB.push(b.obj); subB.push(b.sub); }
+    }
+    const nB = objB.length; // === subB.length (só dias com AMBOS)
+    if (nB < 1) return null; // sem baseline não há média
+    const muSub = dMean(subB), muObj = dMean(objB);
+    const sdSub = Math.max(dSampleSD(subB), cfg.sd_minimo_subjetivo);
+    const sdObj = Math.max(dSampleSD(objB), cfg.sd_minimo_objetivo);
+    const zSub = (cur.sub - muSub) / sdSub;
+    const zObj = (cur.obj - muObj) / sdObj;
+    return { d: zSub - zObj, zSub, zObj, muSub, sdSub, muObj, sdObj, nB };
+  }
+
+  // Piso do baseline para um d_i do sd_diff (chave PRÓPRIA em config, não
+  // derivada de dias_minimos — parâmetros vivem no config e decidem-se
+  // explicitamente). O dia AVALIADO exige dias_minimos; os d_i que estimam o
+  // sd_diff bastam-se com dias_minimos_di.
+  const minBaselineDi = cfg.dias_minimos_di;
+
+  // Dias válidos no baseline do alvo (reportado mesmo quando o alvo em si é inválido).
+  let nBaseTarget = 0;
+  for (let k = 1; k <= N; k++) {
+    const b = byDate.get(addDaysYMD(targetDate, -k));
+    if (b && b.obj != null && b.sub != null) nBaseTarget++;
+  }
+
+  // d_i sobre a janela [target − N + 1 .. target] (inclui hoje), com baseline ≥ minBaselineDi.
+  const dSeries: number[] = [];
+  for (let i = N - 1; i >= 0; i--) {
+    const st = rawStat(addDaysYMD(targetDate, -i));
+    if (st && st.nB >= minBaselineDi) dSeries.push(st.d);
+  }
+  const nDiff = dSeries.length;
+  const sdDiffRaw = dSampleSD(dSeries);
+
+  // Dia avaliado: exige dias_minimos no baseline (gate a).
+  const t = rawStat(targetDate);
+  const today = t && t.nB >= cfg.dias_minimos ? t : null;
+  const confidence = +Math.sqrt(Math.min(nDiff, N) / N).toFixed(3);
+
+  // Gate (a): alvo válido com baseline suficiente (today != null cobre ambos).
+  // Gate (b): d_i suficientes para estimar sd_diff.
+  if (!today || nDiff < cfg.min_dias_diferenca) {
+    return {
+      score: null, drivers: [], vs_baseline: null, confidence,
+      context: {
+        status: 'insufficient_data',
+        z_sub: today ? +today.zSub.toFixed(3) : null,
+        z_obj: today ? +today.zObj.toFixed(3) : null,
+        mu_sub: today ? +today.muSub.toFixed(2) : null,
+        sd_sub: today ? +today.sdSub.toFixed(3) : null,
+        mu_obj: today ? +today.muObj.toFixed(2) : null,
+        sd_obj: today ? +today.sdObj.toFixed(3) : null,
+        d_bruto: today ? +today.d.toFixed(3) : null,
+        sd_diff: nDiff >= 2 ? +sdDiffRaw.toFixed(3) : null,
+        n_dias_baseline: today ? today.nB : nBaseTarget,
+        n_dias_diferenca: nDiff,
+        janela_dias: N,
+        limiar: cfg.limiar_divergencia,
+      },
+    };
+  }
+
+  const divergencia = today.d / Math.max(sdDiffRaw, cfg.sd_minimo_diferenca);
+  return {
+    score: +divergencia.toFixed(3), // SINAL preservado
+    drivers: [], vs_baseline: null, confidence,
+    context: {
+      status: 'ok',
+      z_sub: +today.zSub.toFixed(3),
+      z_obj: +today.zObj.toFixed(3),
+      mu_sub: +today.muSub.toFixed(2),
+      sd_sub: +today.sdSub.toFixed(3),
+      mu_obj: +today.muObj.toFixed(2),
+      sd_obj: +today.sdObj.toFixed(3),
+      d_bruto: +today.d.toFixed(3),
+      sd_diff: +sdDiffRaw.toFixed(3),
+      n_dias_baseline: today.nB,
+      n_dias_diferenca: nDiff,
+      janela_dias: N,
+      limiar: cfg.limiar_divergencia,
+    },
+  };
+}
+
+
+// ═══════════════════════════════════════════════════════════════════════════
 // resolveHeartRateSource — série de HR unificada para um intervalo de treino.
 //
 // Pura, determinística, sem IO nem relógio — mesma disciplina do getSleepScore
