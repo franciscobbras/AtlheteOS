@@ -86,13 +86,13 @@ export async function computeDivergence(
   const cfg: DivergenceConfig = {
     janela_dias: need("janela_dias"),
     dias_minimos: need("dias_minimos"),
-    dias_minimos_di: need("dias_minimos_di"),
     min_dias_diferenca: need("min_dias_diferenca"),
     sd_minimo_subjetivo: need("sd_minimo_subjetivo"),
     sd_minimo_objetivo: need("sd_minimo_objetivo"),
     sd_minimo_diferenca: need("sd_minimo_diferenca"),
     limiar_divergencia: need("limiar_divergencia"),
-    fiabilidade_minima: need("fiabilidade_minima"),
+    // Opcional: se a chave não estiver semeada, o gate de fiabilidade fica inerte.
+    fiabilidade_minima: p.has("fiabilidade_minima") ? p.get("fiabilidade_minima")! : null,
   };
   const N = cfg.janela_dias;
 

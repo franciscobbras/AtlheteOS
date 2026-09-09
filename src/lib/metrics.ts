@@ -681,13 +681,12 @@ export interface DivergenceDay {
 export interface DivergenceConfig {
   janela_dias: number;         // 14 — baseline dos z E janela dos d_i
   dias_minimos: number;        // 10 — mínimo de dias válidos no baseline do dia AVALIADO
-  dias_minimos_di: number;     // 5 — mínimo de dias válidos no baseline de cada d_i do sd_diff
-  min_dias_diferenca: number;  // 10 — mínimo de d_i para estimar sd_diff
+  min_dias_diferenca: number;  // 10 — mínimo de d_i para estimar sd_diff E piso do baseline de cada d_i
   sd_minimo_subjetivo: number; // 0.5 — piso do SD subjetivo
   sd_minimo_objetivo: number;  // 3.0 — piso do SD objetivo
   sd_minimo_diferenca: number; // 0.8 — piso do sd_diff
   limiar_divergencia: number;  // 1.5 — |divergência| a partir da qual dispara (guardado no context p/ a UI)
-  fiabilidade_minima: number;  // 0.40 — check-in abaixo desta fiabilidade não conta (nem baseline nem dia avaliado)
+  fiabilidade_minima?: number | null; // 0.40 — check-in abaixo desta fiabilidade não conta; ausente/null = gate inerte
 }
 
 export interface DivergenceContext {
@@ -735,7 +734,7 @@ export function getDivergence(days: DivergenceDay[], cfg: DivergenceConfig, targ
   // corta (fail-open): não deitar fora o dia quando não se consegue avaliar.
   const byDate = new Map<string, { obj: number | null; sub: number | null }>();
   for (const d of days) {
-    const relOk = d.sub_reliability == null || d.sub_reliability >= cfg.fiabilidade_minima;
+    const relOk = d.sub_reliability == null || cfg.fiabilidade_minima == null || d.sub_reliability >= cfg.fiabilidade_minima;
     byDate.set(d.date, { obj: d.obj, sub: relOk ? d.sub : null });
   }
 
@@ -762,11 +761,10 @@ export function getDivergence(days: DivergenceDay[], cfg: DivergenceConfig, targ
     return { d: zSub - zObj, zSub, zObj, muSub, sdSub, muObj, sdObj, nB };
   }
 
-  // Piso do baseline para um d_i do sd_diff (chave PRÓPRIA em config, não
-  // derivada de dias_minimos — parâmetros vivem no config e decidem-se
-  // explicitamente). O dia AVALIADO exige dias_minimos; os d_i que estimam o
-  // sd_diff bastam-se com dias_minimos_di.
-  const minBaselineDi = cfg.dias_minimos_di;
+  // Piso do baseline para um d_i do sd_diff = min_dias_diferenca (mesmo valor do
+  // gate de contagem; não se duplica um parâmetro). Cada d_i que estima o sd_diff
+  // exige o mesmo baseline que o gate exige em número de d_i.
+  const minBaselineDi = cfg.min_dias_diferenca;
 
   // Dias válidos no baseline do alvo (reportado mesmo quando o alvo em si é inválido).
   let nBaseTarget = 0;
@@ -832,6 +830,94 @@ export function getDivergence(days: DivergenceDay[], cfg: DivergenceConfig, targ
       limiar: cfg.limiar_divergencia,
     },
   };
+}
+
+
+// ═══════════════════════════════════════════════════════════════════════════
+// getWeightTrend — trend weight + velocidade em kg/semana.
+//
+// Pura, determinística, sem IO nem relógio — mesma disciplina do resto. O número
+// acionável é a VELOCIDADE (défice/superávit), não o peso absoluto, que oscila
+// 1-2 kg com hidratação e conteúdo intestinal.
+//
+// EMA COM DECAIMENTO POR TEMPO DECORRIDO (não por posição): alpha depende do
+// intervalo REAL desde a medição anterior. alpha_i = 1 − 0.5^(Δt / half_life).
+//   · Δt = half_life  → alpha = 0.5: o novo ponto vale metade (equilíbrio com o
+//     passado — conta o tempo, mas um valor isolado após uma pausa NÃO domina).
+//   · Δt pequeno (medição diária) → alpha pequeno: cada ponto move pouco a trend.
+// Sem interpolar, sem repetir o último valor. Buracos são respeitados pelo Δt.
+//
+// Velocidade = (EMA(último) − EMA(≤ último−velocity_window)) normalizada a
+// kg/semana pelos dias reais entre os dois pontos. Gate: < min_days medições →
+// status 'forming' (à terceira pesagem a velocidade é ruído em kg/semana).
+// ═══════════════════════════════════════════════════════════════════════════
+
+export interface WeightPoint { date: string; kg: number } // uma pesagem (uma por dia)
+
+export interface WeightTrendConfig {
+  ema_half_life_days: number;   // 7
+  velocity_window_days: number; // 7
+  min_days: number;             // 14 — gate de publicação da velocidade
+}
+
+export interface WeightTrendPoint { date: string; kg: number; ema: number }
+
+export interface WeightTrendResult {
+  status: 'ok' | 'forming';
+  trend: WeightTrendPoint[];              // ponto cru + EMA, por medição
+  velocity_kg_per_week: number | null;    // null enquanto 'forming' ou sem histórico p/ a janela
+  n_measurements: number;
+  latest: { date: string; kg: number; ema: number } | null;
+  window_days: number;
+}
+
+function daysBetweenYMD(a: string, b: string): number {
+  return (Date.parse(`${b}T00:00:00Z`) - Date.parse(`${a}T00:00:00Z`)) / 86400000;
+}
+
+/**
+ * Trend + velocidade a partir da série de pesagens (uma por dia). `points` não
+ * precisa de vir ordenado; é ordenado por data aqui. Puro.
+ */
+export function getWeightTrend(points: WeightPoint[], cfg: WeightTrendConfig): WeightTrendResult {
+  const pts = [...points].filter((p) => p.kg != null && isFinite(p.kg)).sort((a, b) => a.date.localeCompare(b.date));
+  const n = pts.length;
+  if (n === 0) {
+    return { status: 'forming', trend: [], velocity_kg_per_week: null, n_measurements: 0, latest: null, window_days: cfg.velocity_window_days };
+  }
+
+  // EMA com decaimento por tempo. Primeiro ponto = ele próprio.
+  const trend: WeightTrendPoint[] = [];
+  let ema = pts[0].kg;
+  trend.push({ date: pts[0].date, kg: pts[0].kg, ema });
+  for (let i = 1; i < n; i++) {
+    const dt = Math.max(0, daysBetweenYMD(pts[i - 1].date, pts[i].date));
+    const alpha = dt <= 0 ? 1 : 1 - Math.pow(0.5, dt / cfg.ema_half_life_days);
+    ema = ema + alpha * (pts[i].kg - ema);
+    trend.push({ date: pts[i].date, kg: pts[i].kg, ema: +ema.toFixed(3) });
+  }
+
+  const last = trend[n - 1];
+  const latest = { date: last.date, kg: last.kg, ema: last.ema };
+
+  // Gate: sem min_days medições, a velocidade é ruído — não se publica.
+  if (n < cfg.min_days) {
+    return { status: 'forming', trend, velocity_kg_per_week: null, n_measurements: n, latest, window_days: cfg.velocity_window_days };
+  }
+
+  // EMA de referência = último ponto com data ≤ (último − velocity_window_days).
+  const refCutoff = last.date;
+  let ref: WeightTrendPoint | null = null;
+  for (let i = n - 1; i >= 0; i--) {
+    if (daysBetweenYMD(trend[i].date, refCutoff) >= cfg.velocity_window_days) { ref = trend[i]; break; }
+  }
+  let velocity: number | null = null;
+  if (ref) {
+    const elapsed = daysBetweenYMD(ref.date, last.date);
+    if (elapsed > 0) velocity = +(((last.ema - ref.ema) / elapsed) * 7).toFixed(3);
+  }
+
+  return { status: 'ok', trend, velocity_kg_per_week: velocity, n_measurements: n, latest, window_days: cfg.velocity_window_days };
 }
 
 

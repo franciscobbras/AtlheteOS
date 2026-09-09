@@ -10,6 +10,8 @@
 import { useEffect, useState } from 'react';
 import { supabase } from '@/lib/supabaseClient';
 import CheckinForm, { CheckinValues, localTodayYMD } from './CheckinForm';
+import WeightPopup from './WeightPopup';
+import WeightTrendCard from './WeightTrendCard';
 
 type Row = {
   date: string;
@@ -76,6 +78,10 @@ export default function CheckinScreen() {
   const [rel, setRel] = useState<{ grace: number; halfLife: number; floor: number } | null>(null);
   const [err, setErr] = useState<string | null>(null);
   const [savedTick, setSavedTick] = useState(0);
+  // Peso: pop-up separado que abre DEPOIS de submeter o check-in; refreshKey
+  // recarrega o cartão da trend quando se guarda um peso.
+  const [weightPromptOpen, setWeightPromptOpen] = useState(false);
+  const [weightRefresh, setWeightRefresh] = useState(0);
 
   const today = localTodayYMD();
 
@@ -182,7 +188,7 @@ export default function CheckinScreen() {
           <CheckinForm
             key={todayRow ? 'edit' : 'new'}
             initial={initial}
-            onSaved={() => setSavedTick((t) => t + 1)}
+            onSaved={() => { setSavedTick((t) => t + 1); setWeightPromptOpen(true); }}
           />
         )}
         {todayRow && (() => {
@@ -203,6 +209,8 @@ export default function CheckinScreen() {
           </p>
         )}
       </div>
+
+      <WeightTrendCard refreshKey={weightRefresh} />
 
       <div className="card">
         <p className="section-label" style={{ marginTop: 0 }}>Histórico</p>
@@ -256,6 +264,13 @@ export default function CheckinScreen() {
           </div>
         )}
       </div>
+
+      {weightPromptOpen && (
+        <WeightPopup
+          onClose={() => setWeightPromptOpen(false)}
+          onSaved={() => setWeightRefresh((k) => k + 1)}
+        />
+      )}
     </div>
   );
 }
