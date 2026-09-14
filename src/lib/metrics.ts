@@ -759,10 +759,11 @@ export function getDivergence(days: DivergenceDay[], cfg: DivergenceConfig, targ
     return { d: zSub - zObj, zSub, zObj, muSub, sdSub, muObj, sdObj, nB };
   }
 
-  // Piso do baseline para um d_i do sd_diff = min_dias_diferenca (mesmo valor do
-  // gate de contagem; não se duplica um parâmetro). Cada d_i que estima o sd_diff
-  // exige o mesmo baseline que o gate exige em número de d_i.
-  const minBaselineDi = cfg.min_dias_diferenca;
+  // Piso do baseline de CADA d_i = dias_minimos (governa se um d_i é calculável),
+  // o MESMO gate do dia avaliado. Distinto de min_dias_diferenca, que é só a
+  // contagem final de d_i para estimar o sd_diff. Ambos valem 10 na config por
+  // agora, mas são gates separados, cada um com a sua chave.
+  const minBaselineDi = cfg.dias_minimos;
 
   // Dias válidos no baseline do alvo (reportado mesmo quando o alvo em si é inválido).
   let nBaseTarget = 0;
