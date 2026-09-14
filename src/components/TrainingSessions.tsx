@@ -160,7 +160,13 @@ function SessionCard({
 }) {
   const open = session.end_utc === null;
   const fallbackEndMs = open ? nowMs : Date.parse(session.end_utc as string);
-  const durSec = (fallbackEndMs - Date.parse(session.start_utc)) / 1000;
+  // Duração e data pelo SPAN REAL: união dos limites gravados com os segmentos —
+  // robusto a um envelope por sincronizar (bloco estendido/recuado além da sessão).
+  const segStarts = blocks.flatMap((b) => b.block_segments.map((s) => Date.parse(s.start_utc)));
+  const segEnds = blocks.flatMap((b) => b.block_segments.filter((s) => s.end_utc).map((s) => Date.parse(s.end_utc as string)));
+  const startMs = Math.min(Date.parse(session.start_utc), ...(segStarts.length ? segStarts : [Infinity]));
+  const endMs = open ? nowMs : Math.max(fallbackEndMs, ...(segEnds.length ? segEnds : [-Infinity]));
+  const durSec = (endMs - startMs) / 1000;
 
   // Por bloco: tempo de trabalho (soma dos segmentos) e RPE.
   const rows = blocks.map((b) => {
@@ -179,7 +185,7 @@ function SessionCard({
       {/* Cabeçalho */}
       <div style={{ display: 'flex', alignItems: 'baseline', justifyContent: 'space-between', gap: 12 }}>
         <span style={{ fontSize: 15, fontWeight: 600, color: 'var(--text)' }}>
-          {fmtLocal(session.start_utc, session.utc_offset_seconds)}
+          {fmtLocal(new Date(startMs).toISOString(), session.utc_offset_seconds)}
         </span>
         <span style={{ fontSize: 13, color: open ? 'var(--success)' : 'var(--text-secondary)', fontWeight: 600 }}>
           {open ? '● em curso' : fmtDur(durSec)}

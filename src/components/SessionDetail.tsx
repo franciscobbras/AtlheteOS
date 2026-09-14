@@ -20,10 +20,11 @@
  */
 
 import Link from 'next/link';
+import { useRouter } from 'next/navigation';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   getSession, listApparatus, listBlocks,
-  updateBlockMeta, updateSegmentTime, deleteBlock, addBlock,
+  updateBlockMeta, updateSegmentTime, deleteBlock, addBlock, updateSessionBounds, deleteSession,
   TrainingError, type SessionRow, type BlockRow, type Apparatus, type Segment,
 } from '@/lib/training';
 import { getSessionHrSeries, type HrSeries } from '@/lib/hr';
@@ -101,6 +102,9 @@ export default function SessionDetail({ sessionId }: { sessionId: string }) {
 
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [adding, setAdding] = useState(false);
+  const [sessionEditOpen, setSessionEditOpen] = useState(false);
+  const [confirmDelSession, setConfirmDelSession] = useState(false);
+  const router = useRouter();
 
   const fromMs = session ? Date.parse(session.start_utc) : 0;
   const toMs = session ? (session.end_utc ? Date.parse(session.end_utc) : nowMs) : 0;
@@ -135,9 +139,32 @@ export default function SessionDetail({ sessionId }: { sessionId: string }) {
 
   const selected = useMemo(() => blockViews.find((b) => b.id === selectedId) ?? null, [blockViews, selectedId]);
 
-  const loadCore = useCallback(async (opts: { withHr: boolean }) => {
-    const [s, apps, bs] = await Promise.all([getSession(sessionId), listApparatus(), listBlocks(sessionId)]);
-    if (!s) { setError('Sessão não encontrada.'); return; }
+  const loadCore = useCallback(async (opts: { withHr: boolean; syncEnvelope?: boolean }) => {
+    const [s0, apps, bs] = await Promise.all([getSession(sessionId), listApparatus(), listBlocks(sessionId)]);
+    if (!s0) { setError('Sessão não encontrada.'); return; }
+    let s = s0;
+
+    // Envelope da sessão: os limites gravados têm de conter os blocos. Se uma
+    // edição empurrou um segmento para antes do início ou para além do fim da
+    // sessão, expande-se (NUNCA encolhe — preserva pausas antes/depois).
+    if (opts.syncEnvelope) {
+      const segStarts: number[] = [], segEnds: number[] = [];
+      for (const b of bs) for (const sg of b.block_segments) {
+        segStarts.push(Date.parse(sg.start_utc));
+        if (sg.end_utc) segEnds.push(Date.parse(sg.end_utc));
+      }
+      if (segStarts.length && segEnds.length) {
+        const minStart = Math.min(...segStarts), maxEnd = Math.max(...segEnds);
+        const patch: { start_utc?: string; end_utc?: string } = {};
+        if (minStart < Date.parse(s.start_utc)) patch.start_utc = new Date(minStart).toISOString();
+        if (s.end_utc && maxEnd > Date.parse(s.end_utc)) patch.end_utc = new Date(maxEnd).toISOString();
+        if (Object.keys(patch).length) {
+          await updateSessionBounds(sessionId, patch);
+          s = { ...s, ...patch };
+        }
+      }
+    }
+
     setSession(s);
     setApparatus(apps);
     setRawBlocks(bs);
@@ -197,7 +224,7 @@ export default function SessionDetail({ sessionId }: { sessionId: string }) {
         if (next) { const nf = firstSeg(next.segs); if (nf?.id) await updateSegmentTime(nf.id, { start_utc: iso }); }
       }
 
-      await loadCore({ withHr: false });
+      await loadCore({ withHr: false, syncEnvelope: true });
     } catch (e) {
       setActionError(editErr(e));
     } finally { setBusy(false); }
@@ -214,6 +241,42 @@ export default function SessionDetail({ sessionId }: { sessionId: string }) {
     } finally { setBusy(false); }
   }, [loadCore]);
 
+  // Editar os tempos da PRÓPRIA sessão (ex.: esqueci-me de fechar → encolher o
+  // fim). Ao contrário do envelope automático, isto pode ENCOLHER — mas nunca
+  // para dentro de um bloco (o editor limita ao 1º início / último fim).
+  const saveSessionTimes = useCallback(async (startIso: string, endIso: string) => {
+    setBusy(true); setActionError(null);
+    try {
+      await updateSessionBounds(sessionId, { start_utc: startIso, end_utc: endIso });
+      setSessionEditOpen(false);
+      await loadCore({ withHr: true }); // refetch HR para a nova janela
+    } catch (e) {
+      setActionError(editErr(e));
+    } finally { setBusy(false); }
+  }, [sessionId, loadCore]);
+
+  const removeSession = useCallback(async () => {
+    setBusy(true); setActionError(null);
+    try {
+      await deleteSession(sessionId);
+      router.push('/training');
+    } catch (e) {
+      // Mensagens em inglês. TR041 = a sessão ainda tem blocos (só se apaga vazia
+      // — camada de segurança); esvaziar é manual, não automático.
+      const n = blockViews.length;
+      let msg = 'Failed to delete session.';
+      if (e instanceof TrainingError) {
+        if (e.code === 'TR041') msg = `Can't delete: this session still has ${n} block${n === 1 ? '' : 's'}. Delete every block first — a session can only be deleted when empty.`;
+        else if (e.code === 'TR042') msg = 'Session not found.';
+        else if (e.code === 'TR043') msg = 'Not authenticated.';
+        else if (e.message) msg = e.message;
+      } else if (e instanceof Error) { msg = e.message; }
+      setActionError(msg);
+      setConfirmDelSession(false);
+      setBusy(false);
+    }
+  }, [sessionId, router, blockViews]);
+
   const addNew = useCallback(async (c: { apparatusId: string; rpe: number | null; startMs: number; endMs: number }) => {
     setBusy(true); setActionError(null);
     try {
@@ -222,7 +285,7 @@ export default function SessionDetail({ sessionId }: { sessionId: string }) {
         startIso: new Date(c.startMs).toISOString(), endIso: new Date(c.endMs).toISOString(),
       });
       setAdding(false);
-      await loadCore({ withHr: false });
+      await loadCore({ withHr: false, syncEnvelope: true });
     } catch (e) {
       setActionError(editErr(e));
     } finally { setBusy(false); }
@@ -239,7 +302,43 @@ export default function SessionDetail({ sessionId }: { sessionId: string }) {
         <h1 className="page-title" style={{ margin: 0 }}>
           {session ? `${new Date(fromMs + offset * 1000).toISOString().slice(0, 10)} · ${fmtClock(fromMs, offset)}` : 'Sessão'}
         </h1>
+        {session && (
+          <div style={{ marginLeft: 'auto', display: 'flex', gap: 8, alignItems: 'center' }}>
+            <button className="btn btn-ghost btn-sm" onClick={() => setSessionEditOpen((v) => !v)}>
+              {sessionEditOpen ? 'Fechar' : 'Editar tempos'}
+            </button>
+            {!confirmDelSession ? (
+              <button className="btn btn-sm" onClick={() => setConfirmDelSession(true)} disabled={busy}
+                style={{ color: '#fff', background: '#EF4444', border: 'none', borderRadius: 6, padding: '3px 12px', fontWeight: 600 }}>
+                Eliminar sessão
+              </button>
+            ) : (
+              <span style={{ display: 'inline-flex', gap: 8, alignItems: 'center', fontSize: 12.5 }}>
+                <span style={{ color: 'var(--error)' }}>Eliminar tudo?</span>
+                <button className="btn btn-sm" onClick={removeSession} disabled={busy}
+                  style={{ background: '#EF4444', color: '#fff', border: 'none', borderRadius: 6, padding: '3px 10px' }}>
+                  {busy ? '…' : 'Sim'}
+                </button>
+                <button className="btn btn-ghost btn-sm" onClick={() => setConfirmDelSession(false)} disabled={busy}>Não</button>
+              </span>
+            )}
+          </div>
+        )}
       </div>
+
+      {session && sessionEditOpen && (
+        <SessionTimeEditor
+          session={session}
+          offset={offset}
+          nowMs={nowMs}
+          minSegStart={blockViews.length ? Math.min(...blockViews.flatMap((b) => b.spans.map((s) => s[0]))) : null}
+          maxSegEnd={blockViews.length ? Math.max(...blockViews.flatMap((b) => b.spans.map((s) => s[1]))) : null}
+          busy={busy}
+          onSave={saveSessionTimes}
+          onCancel={() => setSessionEditOpen(false)}
+        />
+      )}
+      {actionError && <p className="message message-error" style={{ fontSize: 13 }}>{actionError}</p>}
 
       {loading && <div className="card" style={{ color: 'var(--muted)', fontSize: 14 }}>A carregar…</div>}
       {error && <div className="card" style={{ borderColor: 'rgba(239,68,68,0.35)', color: 'var(--error)', fontSize: 13 }}>{error}</div>}
@@ -280,7 +379,6 @@ export default function SessionDetail({ sessionId }: { sessionId: string }) {
               {adding ? 'Fechar' : '+ Adicionar bloco'}
             </button>
           </div>
-          {actionError && <p className="message message-error" style={{ fontSize: 13 }}>{actionError}</p>}
 
           {adding && (
             <NewBlockForm
@@ -329,8 +427,6 @@ export default function SessionDetail({ sessionId }: { sessionId: string }) {
               bv={selected}
               apparatus={apparatus}
               offset={offset}
-              sessionStartMs={fromMs}
-              sessionEndMs={toMs}
               neighbours={neighboursOf(blockViews, selected.id)}
               busy={busy}
               onSave={(changes) => applyEdit(selected, changes)}
@@ -388,15 +484,68 @@ function Stat({ label, value }: { label: string; value: string }) {
   );
 }
 
+/* ── Editor dos tempos da SESSÃO ──────────────────────────────────────────── */
+function SessionTimeEditor({
+  session, offset, nowMs, minSegStart, maxSegEnd, busy, onSave, onCancel,
+}: {
+  session: SessionRow;
+  offset: number;
+  nowMs: number;
+  minSegStart: number | null; // não pode começar DEPOIS do 1º bloco
+  maxSegEnd: number | null;   // não pode acabar ANTES do último bloco
+  busy: boolean;
+  onSave: (startIso: string, endIso: string) => void;
+  onCancel: () => void;
+}) {
+  const startMs0 = Date.parse(session.start_utc);
+  const endMs0 = session.end_utc ? Date.parse(session.end_utc) : nowMs;
+  const [startStr, setStartStr] = useState(toLocalInput(startMs0, offset));
+  const [endStr, setEndStr] = useState(toLocalInput(endMs0, offset));
+
+  function save() {
+    let s = fromLocalInput(startStr, offset);
+    let e = fromLocalInput(endStr, offset);
+    if (minSegStart != null) s = Math.min(s, minSegStart); // contém o 1º bloco
+    if (maxSegEnd != null) e = Math.max(e, maxSegEnd);      // contém o último bloco
+    if (e <= s) return;
+    onSave(new Date(s).toISOString(), new Date(e).toISOString());
+  }
+
+  return (
+    <div className="card" style={{ display: 'grid', gap: 12 }}>
+      <p className="section-label" style={{ margin: 0 }}>Tempos da sessão</p>
+      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10 }}>
+        <label style={{ display: 'grid', gap: 4, fontSize: 12.5, color: 'var(--text-secondary)' }}>
+          Início
+          <input type="datetime-local" className="input" value={startStr}
+            max={minSegStart != null ? toLocalInput(minSegStart, offset) : undefined}
+            onChange={(e) => setStartStr(e.target.value)} style={{ fontSize: 13 }} />
+        </label>
+        <label style={{ display: 'grid', gap: 4, fontSize: 12.5, color: 'var(--text-secondary)' }}>
+          Fim
+          <input type="datetime-local" className="input" value={endStr}
+            min={maxSegEnd != null ? toLocalInput(maxSegEnd, offset) : undefined}
+            onChange={(e) => setEndStr(e.target.value)} style={{ fontSize: 13 }} />
+        </label>
+      </div>
+      <p style={{ margin: 0, fontSize: 11.5, color: 'var(--muted)' }}>
+        Para corrigir um treino que ficou aberto de mais, encolhe o <strong>Fim</strong>. Os limites impedem cortar um bloco (início ≤ 1º bloco, fim ≥ último bloco).
+      </p>
+      <div style={{ display: 'flex', gap: 10 }}>
+        <button className="btn btn-primary btn-sm" onClick={save} disabled={busy}>{busy ? 'A guardar…' : 'Guardar'}</button>
+        <button className="btn btn-ghost btn-sm" onClick={onCancel} disabled={busy}>Cancelar</button>
+      </div>
+    </div>
+  );
+}
+
 /* ── Editor de bloco ──────────────────────────────────────────────────────── */
 function BlockEditor({
-  bv, apparatus, offset, sessionStartMs, sessionEndMs, neighbours, busy, onSave, onDelete, onCancel,
+  bv, apparatus, offset, neighbours, busy, onSave, onDelete, onCancel,
 }: {
   bv: BView;
   apparatus: Apparatus[];
   offset: number;
-  sessionStartMs: number;
-  sessionEndMs: number;
   neighbours: { prev: BView | null; next: BView | null };
   busy: boolean;
   onSave: (c: { apparatusId?: string; rpe?: number | null; newStartMs?: number; newEndMs?: number }) => void;
@@ -410,14 +559,14 @@ function BlockEditor({
   const [confirmDel, setConfirmDel] = useState(false);
 
   // Limites dos tempos: a fronteira partilhada não pode invadir o próprio bloco
-  // nem anular o vizinho. Início ∈ (prev.start | sessão, primeiro fim do bloco);
-  // Fim ∈ (último início do bloco, next.end | sessão).
+  // nem anular o vizinho. A borda EXTERNA é livre (1º bloco pode começar antes,
+  // último pode acabar depois) — a sessão expande-se para conter (null = sem limite).
   const ownFirstEnd = bv.spans.length ? Math.min(...bv.spans.map((s) => s[1])) : bv.endMs;
   const ownLastStart = bv.spans.length ? Math.max(...bv.spans.map((s) => s[0])) : bv.startMs;
-  const startMin = (neighbours.prev ? neighbours.prev.startMs : sessionStartMs) + 60000;
+  const startMin = neighbours.prev ? neighbours.prev.startMs + 60000 : null;
   const startMax = ownFirstEnd - 60000;
   const endMin = ownLastStart + 60000;
-  const endMax = (neighbours.next ? neighbours.next.endMs : sessionEndMs) - 60000;
+  const endMax = neighbours.next ? neighbours.next.endMs - 60000 : null;
 
   function save() {
     const newStartMs = fromLocalInput(startStr, offset);
@@ -451,13 +600,13 @@ function BlockEditor({
         <label style={{ display: 'grid', gap: 4, fontSize: 12.5, color: 'var(--text-secondary)' }}>
           Início
           <input type="datetime-local" className="input" value={startStr}
-            min={toLocalInput(startMin, offset)} max={toLocalInput(startMax, offset)}
+            min={startMin != null ? toLocalInput(startMin, offset) : undefined} max={toLocalInput(startMax, offset)}
             onChange={(e) => setStartStr(e.target.value)} style={{ fontSize: 13 }} />
         </label>
         <label style={{ display: 'grid', gap: 4, fontSize: 12.5, color: 'var(--text-secondary)' }}>
           Fim
           <input type="datetime-local" className="input" value={endStr}
-            min={toLocalInput(endMin, offset)} max={toLocalInput(endMax, offset)}
+            min={toLocalInput(endMin, offset)} max={endMax != null ? toLocalInput(endMax, offset) : undefined}
             onChange={(e) => setEndStr(e.target.value)} style={{ fontSize: 13 }} />
         </label>
       </div>
@@ -558,9 +707,12 @@ function NewBlockForm({
   );
 }
 
-function clamp(v: number, lo: number, hi: number): number {
-  if (hi < lo) return v; // limites inválidos (bloco degenerado) → não força
-  return Math.min(hi, Math.max(lo, v));
+function clamp(v: number, lo: number | null, hi: number | null): number {
+  if (lo != null && hi != null && hi < lo) return v; // limites inválidos → não força
+  let x = v;
+  if (lo != null) x = Math.max(lo, x);
+  if (hi != null) x = Math.min(hi, x);
+  return x;
 }
 
 function SourceTag({ hr }: { hr: HrSeries }) {

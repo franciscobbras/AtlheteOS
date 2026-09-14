@@ -134,12 +134,14 @@ export interface SleepScoreConfig {
   rem_target_max: number;
   rem_zero_below: number;
   rem_zero_above: number;
-  // latência
-  latency_optimal_min_mins: number;
+  // latência — v4: curva UNILATERAL. Planalto [optimal_min..optimal_max] a 100,
+  // decai linearmente até 0 em zero_above. Sem braço inferior (adormecer depressa
+  // já não penaliza: com rotina noturna mede a eficácia da rotina, não pressão de
+  // sono). As chaves latency_zero_below_mins e latency_deprivation_mins foram
+  // superseded — NÃO ler (viriam undefined).
+  latency_optimal_min_mins: number; // 0 em v4
   latency_optimal_max_mins: number;
-  latency_zero_below_mins: number;
   latency_zero_above_mins: number;
-  latency_deprivation_mins: number; // só flag
   latency_poor_mins: number;        // só flag
   // modulação por carga
   deep_shift_per_sd: number;
@@ -168,7 +170,6 @@ export type SleepFlag =
   | 'excessive_sleep'
   | 'rem_rebound'
   | 'deep_excessive'
-  | 'sleep_pressure_high'
   | 'latency_poor'
   | 'load_modulation_unavailable';
 
@@ -298,15 +299,13 @@ function remPoints(remFrac: number, cfg: SleepScoreConfig): number {
   return 0;
 }
 
-/** Latência (min): curva em U assimétrica. */
+/** Latência (min): curva UNILATERAL (v4). Planalto a 100 até optimal_max,
+ *  decai linearmente até 0 em zero_above. Sem braço inferior — adormecer
+ *  depressa não penaliza. */
 function latencyPoints(latMins: number, cfg: SleepScoreConfig): number {
-  const zb = cfg.latency_zero_below_mins;
   const za = cfg.latency_zero_above_mins;
-  const omin = cfg.latency_optimal_min_mins;
   const omax = cfg.latency_optimal_max_mins;
-  if (latMins <= zb) return 0;
-  if (latMins < omin) return lerp(latMins, zb, 0, omin, 100);
-  if (latMins <= omax) return 100;
+  if (latMins <= omax) return 100;                     // planalto [0..optimal_max]
   if (latMins < za) return lerp(latMins, omax, 100, za, 0);
   return 0;
 }
@@ -403,7 +402,6 @@ export function getSleepScore(
   // Flags de arquitetura/latência.
   if (deepFrac != null && deepFrac > cfg.deep_target_max + shift) flags.push('deep_excessive');
   if (remFrac != null && remFrac > cfg.rem_target_max) flags.push('rem_rebound');
-  if (latencyMins != null && latencyMins < cfg.latency_deprivation_mins) flags.push('sleep_pressure_high');
   if (latencyMins != null && latencyMins > cfg.latency_poor_mins) flags.push('latency_poor');
   if (tstHours / cfg.sleep_need_hours > cfg.excessive_sleep_ratio) flags.push('excessive_sleep');
 

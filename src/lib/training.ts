@@ -288,6 +288,29 @@ export async function addBlock(
   raise(seg.error);
 }
 
+/**
+ * Descarta uma sessão VAZIA (misclick), pelo RPC training.discard_session. NÃO há
+ * DELETE em training.sessions e NÃO se esvazia nada automaticamente — a sessão ter
+ * de estar vazia é uma CAMADA DE SEGURANÇA (não apagar treino sem querer). Se tiver
+ * blocos, o RPC recusa com TR041 (a mensagem traz a contagem); a UI mostra o aviso.
+ * Erros: TR041 (tem blocos), TR042 (não existe), TR043 (não autenticado).
+ */
+export async function deleteSession(sessionId: string): Promise<void> {
+  const { error } = await tr().rpc('discard_session', { p_session_id: sessionId });
+  raise(error);
+}
+
+/** Expande (ou ajusta) os limites da sessão para conter os blocos. ISO UTC.
+ *  Usado quando uma edição de bloco empurra para além do início/fim gravado. */
+export async function updateSessionBounds(
+  sessionId: string,
+  patch: { start_utc?: string; end_utc?: string },
+): Promise<void> {
+  if (!Object.keys(patch).length) return;
+  const { error } = await tr().from('sessions').update(patch).eq('id', sessionId);
+  raise(error);
+}
+
 /** Ajusta os tempos de um segmento (início e/ou fim). ISO UTC. */
 export async function updateSegmentTime(
   segmentId: string,
