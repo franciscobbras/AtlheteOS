@@ -9,7 +9,7 @@ const LABEL_MAP: Record<string, string> = {
   train: 'Treino',
   'wearable-data': 'wearable_data',
   nutrition: 'Nutrition',
-  life: 'Life',
+  sleep: 'Sleep',
   student: 'Student',
   live: 'Live',
   upload: 'Upload',

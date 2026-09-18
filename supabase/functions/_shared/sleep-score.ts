@@ -104,6 +104,10 @@ export async function computeSleepScores(
     latency_optimal_max_mins: need("latency_optimal_max_mins"),
     latency_zero_above_mins: need("latency_zero_above_mins"),
     latency_poor_mins: need("latency_poor_mins"),
+    weight_arousals: need("weight_arousals"),
+    arousal_anchor_100: need("arousal_anchor_100"),
+    arousal_anchor_50: need("arousal_anchor_50"),
+    arousal_anchor_0: need("arousal_anchor_0"),
     deep_shift_per_sd: need("deep_shift_per_sd"),
     load_z_min: need("load_z_min"),
     load_z_max: need("load_z_max"),
@@ -119,18 +123,32 @@ export async function computeSleepScores(
   const winTo = addDaysISO(to, 2);
   const { data: sleepRows, error: slErr } = await client
     .schema("wearable").from("sleep")
-    .select("start_utc, end_utc, utc_offset_seconds, stages")
+    .select("start_utc, end_utc, utc_offset_seconds, stages, raw")
     .gte("end_utc", winFrom)
     .lt("end_utc", winTo)
     .order("start_utc", { ascending: true });
   if (slErr) throw new Error(`ler wearable.sleep falhou: ${slErr.message}`);
 
+  // shortAwakenings só existe desde 2026-08-04; ausente ⇒ null (componente
+  // indisponível), presente e vazio ⇒ 0. NUNCA converter ausência em 0.
+  const shortAwakeningsCount = (raw: unknown): number | null => {
+    const sa = (raw as { sleep?: { shortAwakenings?: unknown } })?.sleep?.shortAwakenings;
+    return Array.isArray(sa) ? sa.length : null;
+  };
+
   const byDay = new Map<string, RawSleepBlock[]>();
-  for (const r of (sleepRows ?? []) as RawSleepBlock[]) {
+  for (const r of (sleepRows ?? []) as Array<RawSleepBlock & { raw: unknown }>) {
     const d = wakeDay(r.end_utc, r.utc_offset_seconds);
     if (d < from || d > to) continue; // fora do alvo (apanhado só pela janela larga)
+    const block: RawSleepBlock = {
+      start_utc: r.start_utc,
+      end_utc: r.end_utc,
+      utc_offset_seconds: r.utc_offset_seconds,
+      stages: r.stages,
+      short_awakenings: shortAwakeningsCount(r.raw),
+    };
     if (!byDay.has(d)) byDay.set(d, []);
-    byDay.get(d)!.push(r);
+    byDay.get(d)!.push(block);
   }
 
   // 3. Calcular + upsert por noite.

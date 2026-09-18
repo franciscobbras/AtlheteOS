@@ -21,7 +21,7 @@ import { supabase } from '@/lib/supabaseClient';
 
 type DailyRow = { date: string; metric_type: string; value: number; unit: string | null; source: string };
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
-export type SleepRow = { start_utc: string; end_utc: string; utc_offset_seconds: number; summary: any; stages: any; source: string };
+export type SleepRow = { start_utc: string; end_utc: string; utc_offset_seconds: number; summary: any; stages: any; source: string; raw?: any };
 type ScoreRow = { date: string; score: number | null; confidence: number | null };
 type DayIndexRow = { day: string; hr: number; hrv: number; spo2: number };
 type IntradayPoint = { timestamp_utc: string; utc_offset_seconds: number; value: number };
@@ -88,6 +88,24 @@ export function efficiencyPct(summary: any): number | null {
   return null;
 }
 
+// Restlessness = raw->'sleep'->'shortAwakenings' (micro-despertares <5min). Vive
+// só no raw; devolve o array (mesmo vazio) ou null se a chave não existir (noites
+// antes de 2026-08-04). Distingue ausência ([]→presente vazio, null→ausente).
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+export function restlessnessSegs(raw: any): { startTime: string; endTime: string }[] | null {
+  const sa = raw?.sleep?.shortAwakenings;
+  return Array.isArray(sa) ? sa : null;
+}
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+export function restlessnessMinutes(segs: { startTime: string; endTime: string }[]): number {
+  let m = 0;
+  for (const s of segs) {
+    const d = (Date.parse(s.endTime) - Date.parse(s.startTime)) / 60000;
+    if (Number.isFinite(d) && d > 0) m += d;
+  }
+  return m;
+}
+
 // ── Metric column ordering + labels ────────────────────────────────────────────
 
 const METRIC_ORDER = ['daily_hrv_rmssd', 'resting_hr', 'temp_nightly', 'temp_baseline', 'temp_stddev_30d'];
@@ -139,7 +157,7 @@ export default function WearableRawInspector() {
             .select('date, metric_type, value, unit, source')
             .order('date', { ascending: false }),
           supabase.schema('wearable').from('sleep')
-            .select('start_utc, end_utc, utc_offset_seconds, summary, stages, source')
+            .select('start_utc, end_utc, utc_offset_seconds, summary, stages, source, raw')
             .order('start_utc', { ascending: false }),
           supabase.schema('metrics').from('daily_scores')
             .select('date, score, confidence')
@@ -312,6 +330,7 @@ function Inspector({ daily, sleep, scores }: { daily: DailyRow[]; sleep: SleepRo
               <th style={{ textAlign: 'right' }}>Profundo</th>
               <th style={{ textAlign: 'right' }}>REM</th>
               <th style={{ textAlign: 'right' }}>Eficiência</th>
+              <th style={{ textAlign: 'right' }} title="Restlessness — nº de micro-despertares (raw.sleep.shortAwakenings, <5min). — = campo ausente (noites antes de 04-08)">Restless</th>
               <th style={{ textAlign: 'right' }} title="Sleep score (metrics.daily_scores) 0–100">SS</th>
               <th style={{ textAlign: 'right' }} title="Confiança do sleep score (0–1)">Confiança</th>
               <th>Fonte</th>
@@ -324,7 +343,7 @@ function Inspector({ daily, sleep, scores }: { daily: DailyRow[]; sleep: SleepRo
                 return (
                   <tr key={date} style={{ background: MISSING_BG }}>
                     <td style={{ fontWeight: 600 }}>{date}</td>
-                    <td colSpan={10} style={{ ...MUTED, fontStyle: 'italic' }}>— sem dados —</td>
+                    <td colSpan={11} style={{ ...MUTED, fontStyle: 'italic' }}>— sem dados —</td>
                   </tr>
                 );
               }
@@ -333,6 +352,7 @@ function Inspector({ daily, sleep, scores }: { daily: DailyRow[]; sleep: SleepRo
               const deep = stageMinutes(r.summary, 'DEEP');
               const rem = stageMinutes(r.summary, 'REM');
               const eff = efficiencyPct(r.summary);
+              const restSegs = restlessnessSegs(r.raw);
               const sc = scores.get(date);
               const ss = sc && sc.score != null ? Math.round(Number(sc.score)) : null;
               const conf = sc && sc.confidence != null ? Math.round(Number(sc.confidence) * 100) : null;
@@ -354,6 +374,9 @@ function Inspector({ daily, sleep, scores }: { daily: DailyRow[]; sleep: SleepRo
                     <td style={NUM}>{deep ?? <span style={MUTED}>—</span>}</td>
                     <td style={NUM}>{rem ?? <span style={MUTED}>—</span>}</td>
                     <td style={NUM}>{eff != null ? `${eff}%` : <span style={MUTED}>—</span>}</td>
+                    <td style={NUM} title={restSegs ? `${Math.round(restlessnessMinutes(restSegs))} min no total` : 'campo shortAwakenings ausente no raw'}>
+                      {restSegs ? restSegs.length : <span style={MUTED}>—</span>}
+                    </td>
                     <td style={{ ...NUM, fontWeight: 700, color: ss != null ? scoreColor100(ss) : undefined }}>
                       {ss != null ? ss : <span style={MUTED}>—</span>}
                     </td>
@@ -362,8 +385,8 @@ function Inspector({ daily, sleep, scores }: { daily: DailyRow[]; sleep: SleepRo
                   </tr>
                   {open && (
                     <tr>
-                      <td colSpan={11} style={{ padding: 0, background: 'var(--surface-hover)' }}>
-                        <Hypnogram stages={r.stages} offsetSeconds={off} />
+                      <td colSpan={12} style={{ padding: 0, background: 'var(--surface-hover)' }}>
+                        <Hypnogram stages={r.stages} offsetSeconds={off} restlessness={restSegs} />
                       </td>
                     </tr>
                   )}
@@ -391,8 +414,13 @@ const STAGE_LABEL_PT: Record<string, string> = { AWAKE: 'Acordado', REM: 'REM', 
 const STAGE_COLOR: Record<string, string> = { AWAKE: '#F59E0B', REM: '#8B5CF6', LIGHT: '#3B82F6', DEEP: '#1E40AF' };
 const STAGE_ORDER = ['AWAKE', 'REM', 'LIGHT', 'DEEP'];
 
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
-export function Hypnogram({ stages, offsetSeconds }: { stages: any; offsetSeconds: number }) {
+export function Hypnogram({ stages, offsetSeconds, restlessness }: {
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  stages: any; offsetSeconds: number;
+  // Micro-despertares (raw.sleep.shortAwakenings): array = mostra nº + minutos;
+  // null = campo ausente nessa noite; undefined = não fornecido (não mostra nada).
+  restlessness?: { startTime: string; endTime: string }[] | null;
+}) {
   // Raw stage segments → sorted {type, start, end} in UTC ms. Positions use UTC
   // ms deltas (offset-agnostic); axis labels are shifted to local for reading.
   const segs = (Array.isArray(stages) ? stages : [])
@@ -459,6 +487,14 @@ export function Hypnogram({ stages, offsetSeconds }: { stages: any; offsetSecond
           </span>
         ))}
         <span style={MUTED}>Despertares: <strong style={{ color: 'var(--text)' }}>{awakenings}</strong></span>
+        {restlessness !== undefined && (
+          <span style={MUTED}>
+            Micro-despertares (restlessness):{' '}
+            {restlessness
+              ? <strong style={{ color: 'var(--text)' }}>{restlessness.length} · {fmtHhMm(Math.round(restlessnessMinutes(restlessness)))}</strong>
+              : <strong style={{ color: 'var(--text)' }}>—</strong>}
+          </span>
+        )}
       </div>
     </div>
   );

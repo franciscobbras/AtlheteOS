@@ -100,6 +100,10 @@ async function main() {
     latency_optimal_max_mins: need('latency_optimal_max_mins'),
     latency_zero_above_mins: need('latency_zero_above_mins'),
     latency_poor_mins: need('latency_poor_mins'),
+    weight_arousals: need('weight_arousals'),
+    arousal_anchor_100: need('arousal_anchor_100'),
+    arousal_anchor_50: need('arousal_anchor_50'),
+    arousal_anchor_0: need('arousal_anchor_0'),
     deep_shift_per_sd: need('deep_shift_per_sd'),
     load_z_min: need('load_z_min'),
     load_z_max: need('load_z_max'),
@@ -108,27 +112,42 @@ async function main() {
     score_max: need('score_max'),
   };
 
-  // 2. Todas as noites cruas.
+  // 2. Todas as noites cruas. Inclui `raw` para extrair shortAwakenings — o campo
+  //    só existe desde 2026-08-04; ausente ⇒ short_awakenings null (componente
+  //    indisponível), presente e vazio ⇒ 0 (zero arousals). NUNCA converter
+  //    ausência em 0.
   const { data: sleepRows, error: slErr } = await db
     .schema('wearable')
     .from('sleep')
-    .select('start_utc, end_utc, utc_offset_seconds, stages')
+    .select('start_utc, end_utc, utc_offset_seconds, stages, raw')
     .order('start_utc', { ascending: true });
   if (slErr) throw slErr;
 
+  const shortAwakeningsCount = (raw: unknown): number | null => {
+    const sa = (raw as { sleep?: { shortAwakenings?: unknown } })?.sleep?.shortAwakenings;
+    return Array.isArray(sa) ? sa.length : null;
+  };
+
   // 3. Agrupar blocos por data-de-acordar.
   const byDay = new Map<string, RawSleepBlock[]>();
-  for (const r of sleepRows as RawSleepBlock[]) {
+  for (const r of sleepRows as Array<RawSleepBlock & { raw: unknown }>) {
     const d = wakeDay(r.end_utc, r.utc_offset_seconds);
+    const block: RawSleepBlock = {
+      start_utc: r.start_utc,
+      end_utc: r.end_utc,
+      utc_offset_seconds: r.utc_offset_seconds,
+      stages: r.stages,
+      short_awakenings: shortAwakeningsCount(r.raw),
+    };
     if (!byDay.has(d)) byDay.set(d, []);
-    byDay.get(d)!.push(r);
+    byDay.get(d)!.push(block);
   }
   const days = [...byDay.keys()].sort();
 
   // 4. Calcular.
   const rowsToWrite: Record<string, unknown>[] = [];
   const insufficient: string[] = [];
-  const table: { day: string; score: number | null; arch: number | null; dur: number; frag: number | null; deep: number | null; rem: number | null; lat: number | null; latmin: number | null; conf: number; flags: string; blocks: number }[] = [];
+  const table: { day: string; score: number | null; arch: number | null; dur: number; frag: number | null; deep: number | null; rem: number | null; lat: number | null; latmin: number | null; arou: number | null; ai: number | null; conf: number; flags: string; blocks: number }[] = [];
 
   for (const day of days) {
     const blocks = byDay.get(day)!;
@@ -137,7 +156,8 @@ async function main() {
       day, score: r.score, arch: r.architecture, dur: r.duration_factor,
       frag: r.drivers.fragmentation.points, deep: r.drivers.deep.points,
       rem: r.drivers.rem.points, lat: r.drivers.latency.points,
-      latmin: r.context.latency_mins, conf: r.confidence,
+      latmin: r.context.latency_mins, arou: r.drivers.arousals.points,
+      ai: r.context.arousal_index, conf: r.confidence,
       flags: r.context.flags.join(','), blocks: r.context.merged_blocks,
     });
     if (r.status === 'insufficient_data') insufficient.push(day);
@@ -171,10 +191,10 @@ async function main() {
 
   const c = (x: number | null) => (x == null ? '  —' : x.toFixed(1).padStart(5));
   console.log(`\nconfig_version=${configVersion}  |  ${DRY ? 'DRY-RUN (não escreve)' : 'WRITE'}  |  loadZ=null (modulação indisponível)\n`);
-  console.log('day         score  arch   dur   frag  deep   rem   lat  lat_m  conf  blk  flags');
+  console.log('day         score  arch   dur   frag  deep   rem   lat  lat_m   arou    ai  conf  blk  flags');
   for (const t of table) {
     console.log(
-      `${t.day}  ${c(t.score)} ${c(t.arch)} ${t.dur.toFixed(2)}  ${c(t.frag)} ${c(t.deep)} ${c(t.rem)} ${c(t.lat)} ${String(t.latmin ?? '—').padStart(5)}  ${t.conf.toFixed(2)}  ${t.blocks}   ${t.flags}`,
+      `${t.day}  ${c(t.score)} ${c(t.arch)} ${t.dur.toFixed(2)}  ${c(t.frag)} ${c(t.deep)} ${c(t.rem)} ${c(t.lat)} ${String(t.latmin ?? '—').padStart(5)}  ${c(t.arou)} ${String(t.ai == null ? '—' : t.ai.toFixed(2)).padStart(5)}  ${t.conf.toFixed(2)}  ${t.blocks}   ${t.flags}`,
     );
   }
   console.log(`\n── Distribuição do score (n=${scores.length}, insufficient_data=${insufficient.length}) ──`);

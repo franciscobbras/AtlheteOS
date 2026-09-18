@@ -1,7 +1,7 @@
 'use client';
 
 /**
- * Histórico do Sleep Score (tab Life). Reutiliza EXATAMENTE o ecrã de detalhe do
+ * Histórico do Sleep Score (tab Sleep, /sleep). Reutiliza EXATAMENTE o ecrã de detalhe do
  * dashboard (ScoreDetailBody de SleepScoreCard) mas para qualquer dia:
  *
  *   ◀  [ sáb, 5 setembro 2026 ]  ▶      ← setas: dia anterior/seguinte COM score
@@ -17,7 +17,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import { supabase } from '@/lib/supabaseClient';
 import { ScoreDetailBody, scoreColor, type SriRow, type SriPub } from '@/components/SleepScoreCard';
-import { Hypnogram, durationMin, fmtHhMm, efficiencyPct, localHHMM, localDate, type SleepRow } from '@/components/WearableRawInspector';
+import { Hypnogram, durationMin, fmtHhMm, efficiencyPct, localHHMM, localDate, restlessnessSegs, type SleepRow } from '@/components/WearableRawInspector';
 import { localTodayYMD } from '@/components/CheckinForm';
 import type { DayScore, DayCheckin } from '@/contexts/DayDataContext';
 
@@ -102,7 +102,7 @@ export default function SleepHistory() {
           .select('date, sleep_perceived, recovery_feeling, mood_energy, notes')
           .eq('date', selDate).maybeSingle(),
         supabase.schema('wearable').from('sleep')
-          .select('start_utc, end_utc, utc_offset_seconds, summary, stages, source')
+          .select('start_utc, end_utc, utc_offset_seconds, summary, stages, source, raw')
           .gte('end_utc', `${addDays(selDate, -1)}T00:00:00Z`)
           .lte('end_utc', `${addDays(selDate, 1)}T00:00:00Z`)
           .order('end_utc', { ascending: true }),
@@ -242,7 +242,7 @@ function SleepArchitecture({ sleep, blocks }: { sleep: SleepRow; blocks: number 
         {eff != null ? <> · eficiência <strong style={{ color: 'var(--text)' }}>{eff}%</strong></> : null}
         {blocks > 1 ? <> · bloco principal de <strong style={{ color: 'var(--text)' }}>{blocks}</strong> da noite</> : null}
       </p>
-      <Hypnogram stages={sleep.stages} offsetSeconds={off} />
+      <Hypnogram stages={sleep.stages} offsetSeconds={off} restlessness={restlessnessSegs(sleep.raw)} />
     </div>
   );
 }

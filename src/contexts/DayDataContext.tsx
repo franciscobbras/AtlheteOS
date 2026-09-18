@@ -30,6 +30,7 @@ export type ScoreDrivers = {
   deep: { frac: number | null; points: number | null };
   rem: { frac: number | null; points: number | null };
   latency: { mins: number | null; points: number | null };
+  arousals: { index: number | null; points: number | null };
   duration_factor: number;
   architecture: number | null;
   shift: number;
@@ -43,6 +44,7 @@ export type ScoreContext = {
   tst_minutes: number;
   sleep_period_minutes: number;
   latency_mins: number | null;
+  arousal_index: number | null;
 };
 export type DayScore = {
   date: string;

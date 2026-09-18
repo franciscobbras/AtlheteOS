@@ -110,11 +110,12 @@ export function macroRatios(
 export interface SleepScoreConfig {
   // shared
   sleep_need_hours: number;
-  // pesos de arquitetura (somam 1.00)
+  // pesos de arquitetura (somam 1.00 com todos os componentes presentes)
   weight_deep: number;
   weight_fragmentation: number;
   weight_rem: number;
   weight_latency: number;
+  weight_arousals: number;
   // gate / flags de duração
   min_duration_publish_hours: number;
   excessive_sleep_ratio: number;
@@ -143,6 +144,14 @@ export interface SleepScoreConfig {
   latency_optimal_max_mins: number;
   latency_zero_above_mins: number;
   latency_poor_mins: number;        // só flag
+  // arousals (v5) — arousal_index = nº shortAwakenings / horas de TST. Curva
+  // LINEAR INVERTIDA entre âncoras (menos arousals é melhor): 100 no ancora_100,
+  // 50 no ancora_50, 0 no ancora_0. Âncoras dos percentis PRÓPRIOS (p10/p50/>p90),
+  // nunca da literatura clínica de EEG. AUSÊNCIA do campo shortAwakenings ≠ 0
+  // arousals: campo ausente ⇒ componente indisponível (re-normaliza), NÃO 100.
+  arousal_anchor_100: number; // ~p10 → 100 pontos
+  arousal_anchor_50: number;  // ~p50 → 50 pontos
+  arousal_anchor_0: number;   // >p90 → 0 pontos
   // modulação por carga
   deep_shift_per_sd: number;
   load_z_min: number;
@@ -164,6 +173,11 @@ export interface RawSleepBlock {
   end_utc: string;
   utc_offset_seconds: number;
   stages: RawSleepStage[] | null;
+  // Contagem de raw->'sleep'->shortAwakenings deste bloco. null/undefined =
+  // CAMPO AUSENTE (noites antes de 2026-08-04) ⇒ componente arousals indisponível.
+  // 0 = campo presente e vazio ⇒ zero arousals (noite boa neste eixo). A distinção
+  // é deliberada: o IO passa null quando o campo não existe no JSON, nunca 0.
+  short_awakenings?: number | null;
 }
 
 export type SleepFlag =
@@ -184,6 +198,7 @@ export interface SleepScoreResult {
     deep:          { frac: number | null;  points: number | null };
     rem:           { frac: number | null;  points: number | null };
     latency:       { mins: number | null;  points: number | null };
+    arousals:      { index: number | null; points: number | null };
     duration_factor: number;
     architecture: number | null;
     shift: number;            // deslocamento do planalto de deep pela carga
@@ -199,6 +214,11 @@ export interface SleepScoreResult {
     tst_minutes: number;
     sleep_period_minutes: number;
     latency_mins: number | null;
+    // arousal_index CRU (nº shortAwakenings / horas de TST), guardado além dos
+    // pontos do componente. Se a Fitbit mudar a definição do campo (já fundiram
+    // restless↔awake em junho), o degrau vê-se aqui em vez de num score que muda
+    // sem explicação. null = campo ausente (componente indisponível nessa noite).
+    arousal_index: number | null;
   };
 }
 
@@ -310,6 +330,19 @@ function latencyPoints(latMins: number, cfg: SleepScoreConfig): number {
   return 0;
 }
 
+/** Arousals: curva LINEAR INVERTIDA por troços. index = nº/hora de TST. Menos
+ *  é melhor: 100 até ancora_100, 50 no ancora_50, 0 a partir de ancora_0. Sem
+ *  braço superior — dormir sem interrupções não penaliza. */
+function arousalPoints(index: number, cfg: SleepScoreConfig): number {
+  const a100 = cfg.arousal_anchor_100;
+  const a50 = cfg.arousal_anchor_50;
+  const a0 = cfg.arousal_anchor_0;
+  if (index <= a100) return 100;
+  if (index < a50) return lerp(index, a100, 100, a50, 50);
+  if (index < a0) return lerp(index, a50, 50, a0, 0);
+  return 0;
+}
+
 /**
  * Sleep score de uma noite. `blocks` = todos os registos wearable.sleep da
  * data-de-acordar (o agrupamento acontece aqui dentro). `loadZ` = z-score de
@@ -370,6 +403,7 @@ export function getSleepScore(
         deep: { frac: null, points: null },
         rem: { frac: null, points: null },
         latency: { mins: latencyMins, points: null },
+        arousals: { index: null, points: null },
         duration_factor: durationFactor,
         architecture: null,
         shift,
@@ -379,12 +413,13 @@ export function getSleepScore(
         status: 'insufficient_data',
         flags,
         components_present: [],
-        components_absent: ['fragmentation', 'deep', 'rem', 'latency'],
+        components_absent: ['fragmentation', 'deep', 'rem', 'latency', 'arousals'],
         merged_blocks: night.length,
         inter_block_waso_mins: +interBlockWaso.toFixed(1),
         tst_minutes: +tstMin.toFixed(1),
         sleep_period_minutes: +periodMin.toFixed(1),
         latency_mins: latencyMins == null ? null : +latencyMins.toFixed(1),
+        arousal_index: null,
       },
     };
   }
@@ -399,6 +434,16 @@ export function getSleepScore(
   const remPts = remFrac == null ? null : remPoints(remFrac, cfg);
   const latPts = latencyMins == null ? null : latencyPoints(latencyMins, cfg);
 
+  // Arousals: soma dos shortAwakenings dos blocos da noite QUE TÊM o campo. Se
+  // NENHUM bloco tiver o campo (null/undefined em todos), o componente fica
+  // indisponível — nunca 0 arousals (isso daria 100 às noites de julho). Campo
+  // presente e vazio (0) é uma noite boa neste eixo, entra com index 0 → 100 pts.
+  const saCounts = night.map((b) => b.short_awakenings).filter((x): x is number => x != null);
+  const arousalIndex = saCounts.length > 0 && tstHours > 0
+    ? saCounts.reduce((s, v) => s + v, 0) / tstHours
+    : null;
+  const arousalPts = arousalIndex == null ? null : arousalPoints(arousalIndex, cfg);
+
   // Flags de arquitetura/latência.
   if (deepFrac != null && deepFrac > cfg.deep_target_max + shift) flags.push('deep_excessive');
   if (remFrac != null && remFrac > cfg.rem_target_max) flags.push('rem_rebound');
@@ -411,6 +456,7 @@ export function getSleepScore(
   if (deepPts != null) parts.push({ key: 'deep', w: cfg.weight_deep, pts: deepPts });
   if (remPts != null) parts.push({ key: 'rem', w: cfg.weight_rem, pts: remPts });
   if (latPts != null) parts.push({ key: 'latency', w: cfg.weight_latency, pts: latPts });
+  if (arousalPts != null) parts.push({ key: 'arousals', w: cfg.weight_arousals, pts: arousalPts });
 
   const rawWeightSum = parts.reduce((s, p) => s + p.w, 0);
   const architecture = rawWeightSum > 0
@@ -425,7 +471,7 @@ export function getSleepScore(
   const score = rawScore == null ? null : clamp(rawScore, cfg.score_min, cfg.score_max);
 
   const present = parts.map((p) => p.key);
-  const absent = ['fragmentation', 'deep', 'rem', 'latency'].filter((k) => !present.includes(k));
+  const absent = ['fragmentation', 'deep', 'rem', 'latency', 'arousals'].filter((k) => !present.includes(k));
 
   return {
     status: 'ok',
@@ -438,6 +484,7 @@ export function getSleepScore(
       deep: { frac: deepFrac == null ? null : +deepFrac.toFixed(4), points: deepPts == null ? null : +deepPts.toFixed(1) },
       rem: { frac: remFrac == null ? null : +remFrac.toFixed(4), points: remPts == null ? null : +remPts.toFixed(1) },
       latency: { mins: latencyMins == null ? null : +latencyMins.toFixed(1), points: latPts == null ? null : +latPts.toFixed(1) },
+      arousals: { index: arousalIndex == null ? null : +arousalIndex.toFixed(3), points: arousalPts == null ? null : +arousalPts.toFixed(1) },
       duration_factor: +durationFactor.toFixed(4),
       architecture: architecture == null ? null : +architecture.toFixed(1),
       shift: +shift.toFixed(4),
@@ -453,6 +500,7 @@ export function getSleepScore(
       tst_minutes: +tstMin.toFixed(1),
       sleep_period_minutes: +periodMin.toFixed(1),
       latency_mins: latencyMins == null ? null : +latencyMins.toFixed(1),
+      arousal_index: arousalIndex == null ? null : +arousalIndex.toFixed(3),
     },
   };
 }

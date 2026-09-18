@@ -20,7 +20,7 @@ const DRAWER_ITEMS = [
   { href: '/wearable-data', label: 'wearable_data' },
   { href: '/nutrition',     label: 'Nutrition' },
   { href: '/weight',        label: 'Weight' },
-  { href: '/life',          label: 'Life' },
+  { href: '/sleep',         label: 'Sleep' },
   { href: '/student',       label: 'Student' },
   { href: '/live',          label: 'Live' },
 ];

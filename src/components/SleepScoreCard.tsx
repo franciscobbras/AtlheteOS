@@ -3,8 +3,9 @@
 /**
  * Card compacto de Sleep Score (só o tamanho do gauge) + uma leitura mínima do
  * SRI (Sleep Regularity Index), que pertence a este cartão: no card só o valor
- * atual do SRI e a sua tendência; o detalhe completo do SRI vive no modal, que
- * abre ao clicar (junto da decomposição do score e do check-in).
+ * atual do SRI e a sua tendência. Clicar NAVEGA para o tab Sleep (/sleep), onde
+ * vive a decomposição completa do score, o check-in e o histórico — já não abre
+ * modal. O corpo do detalhe (ScoreDetailBody) é partilhado com esse tab.
  *
  * Lê o score DO DIA (metrics.daily_scores, sleep_score, wake-day de hoje) via
  * DayDataContext, e a série do SRI (metric_type='sri'). Só LÊ; cálculo em
@@ -12,6 +13,7 @@
  */
 
 import { useEffect, useState } from 'react';
+import { useRouter } from 'next/navigation';
 import { supabase } from '@/lib/supabaseClient';
 import { useDayData, type DayScore, type DayCheckin } from '@/contexts/DayDataContext';
 
@@ -69,9 +71,9 @@ function Sparkline({ data, w = 640, h = 70, color = '#22C55E' }: { data: number[
 }
 
 export default function SleepScoreCard() {
-  const { loading, score: row, checkin } = useDayData();
+  const { loading, score: row } = useDayData();
+  const router = useRouter();
   const [sriRows, setSriRows] = useState<SriRow[] | null>(null);
-  const [open, setOpen] = useState(false);
 
   useEffect(() => {
     (async () => {
@@ -84,13 +86,6 @@ export default function SleepScoreCard() {
       setSriRows(error ? [] : ((data as SriRow[]) ?? []));
     })();
   }, []);
-
-  useEffect(() => {
-    if (!open) return;
-    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') setOpen(false); };
-    window.addEventListener('keydown', onKey);
-    return () => window.removeEventListener('keydown', onKey);
-  }, [open]);
 
   const score = row && row.score != null ? Math.round(Number(row.score)) : null;
   const conf = row && row.confidence != null ? Math.round(Number(row.confidence) * 100) : null;
@@ -105,9 +100,9 @@ export default function SleepScoreCard() {
   return (
     <>
       <button
-        onClick={() => clickable && setOpen(true)}
+        onClick={() => clickable && router.push('/sleep')}
         disabled={!clickable}
-        title={clickable ? 'Ver decomposição do score e SRI' : (loading ? undefined : 'Sem score de hoje ainda — o sono desta noite ainda não foi calculado')}
+        title={clickable ? 'Abrir o histórico de sono (decomposição do score, SRI, calendário)' : (loading ? undefined : 'Sem score de hoje ainda — o sono desta noite ainda não foi calculado')}
         className="card"
         style={{
           display: 'inline-flex', flexDirection: 'column', alignItems: 'center', gap: 2,
@@ -145,19 +140,11 @@ export default function SleepScoreCard() {
           ) : '—'}
         </span>
       </button>
-
-      {open && row && score != null && (
-        <ScoreDetail
-          row={row} score={score} conf={conf} color={color} checkin={checkin}
-          sriPub={sriPub} sriLatest={sriLatest}
-          onClose={() => setOpen(false)}
-        />
-      )}
     </>
   );
 }
 
-// ── Corpo do detalhe — reutilizado no modal do dashboard E no ecrã do tab Life ──
+// ── Corpo do detalhe — usado no ecrã do tab Sleep (/sleep) via SleepHistory ─────
 export function ScoreDetailBody({
   row, score, conf, color, checkin, sriPub, sriLatest, onClose,
 }: {
@@ -167,11 +154,14 @@ export function ScoreDetailBody({
   const d = row.drivers;
   const ctx = row.context;
 
+  // Pesos v5 (metrics.config, sleep_score). A re-normalização interna sobre os
+  // componentes PRESENTES é que decide o efeito real; estes % são a referência.
   const comps = d ? [
-    { key: 'Fragmentação', raw: d.fragmentation.ratio != null ? `${(d.fragmentation.ratio * 100).toFixed(1)}%` : '—', sub: 'sono / período', points: d.fragmentation.points, weight: 23 },
-    { key: 'Profundo (SWS)', raw: d.deep.frac != null ? `${(d.deep.frac * 100).toFixed(1)}%` : '—', sub: '% do TST', points: d.deep.points, weight: 44 },
+    { key: 'Fragmentação', raw: d.fragmentation.ratio != null ? `${(d.fragmentation.ratio * 100).toFixed(1)}%` : '—', sub: 'sono / período', points: d.fragmentation.points, weight: 12 },
+    { key: 'Profundo (SWS)', raw: d.deep.frac != null ? `${(d.deep.frac * 100).toFixed(1)}%` : '—', sub: '% do TST', points: d.deep.points, weight: 41 },
     { key: 'REM', raw: d.rem.frac != null ? `${(d.rem.frac * 100).toFixed(1)}%` : '—', sub: '% do TST', points: d.rem.points, weight: 18 },
-    { key: 'Latência', raw: d.latency.mins != null ? `${d.latency.mins} min` : '—', sub: 'até adormecer', points: d.latency.points, weight: 15 },
+    { key: 'Latência', raw: d.latency.mins != null ? `${d.latency.mins} min` : '—', sub: 'até adormecer', points: d.latency.points, weight: 14 },
+    { key: 'Arousals', raw: d.arousals?.index != null ? `${d.arousals.index.toFixed(1)}/h` : '—', sub: 'micro-despertares · nº/h de sono', points: d.arousals?.points ?? null, weight: 15 },
   ] : [];
 
   const subItems = [
@@ -333,22 +323,3 @@ export function ScoreDetailBody({
   );
 }
 
-// ── Modal do dashboard: overlay + o corpo reutilizável ──────────────────────
-function ScoreDetail({
-  row, score, conf, color, checkin, sriPub, sriLatest, onClose,
-}: {
-  row: DayScore; score: number; conf: number | null; color: string; checkin: DayCheckin | null;
-  sriPub: SriPub[]; sriLatest: SriPub | null; onClose: () => void;
-}) {
-  const overlay: React.CSSProperties = {
-    position: 'fixed', inset: 0, zIndex: 1000, background: 'rgba(0,0,0,0.72)',
-    backdropFilter: 'blur(6px)', display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 16,
-  };
-  return (
-    <div role="dialog" aria-modal="true" style={overlay} onClick={onClose}>
-      <div className="card" style={{ width: '100%', maxWidth: 720, maxHeight: '92dvh', overflowY: 'auto' }} onClick={(e) => e.stopPropagation()}>
-        <ScoreDetailBody row={row} score={score} conf={conf} color={color} checkin={checkin} sriPub={sriPub} sriLatest={sriLatest} onClose={onClose} />
-      </div>
-    </div>
-  );
-}
